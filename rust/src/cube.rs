@@ -295,7 +295,7 @@ impl Cube {
         self.sys_hz = sys_hz;
         self.hold = hold;
         // PIO clock = sys / integer divider (no jitter), at most 2 x the 595 clock.
-        let div = sys_hz.div_ceil(2 * max_sck_hz) as u16;
+        let div = (sys_hz.div_ceil(2 * max_sck_hz) as u16).max(1);
         self.pio_div = div;
 
         // Show the current picture from the very first pass.

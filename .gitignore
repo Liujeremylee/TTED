@@ -4,3 +4,4 @@ rust/target/
 dist/cube-rs.elf
 # Local backup of the board's MicroPython firmware (660 KB)
 firmware-backup/
+dist-unlimited/cube-rs.elf

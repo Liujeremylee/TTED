@@ -3,6 +3,8 @@
 #   cube-rs.elf  - for picotool / debuggers (debug symbols stay in the .elf; they never go to flash)
 #   SHA256SUMS.txt
 # Usage (from the rust folder):  powershell -ExecutionPolicy Bypass -File .\bundle.ps1
+#        add -Unlimited for the "unlimited" feature (595 clock limit ignored) -> ../dist-unlimited/
+param([switch]$Unlimited)
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
@@ -17,11 +19,17 @@ if (-not $picotool) {
 if (-not $picotool) { throw "picotool not found (install it into ~/.pico-sdk/picotool or put it on PATH)" }
 
 # Optimized build: opt-level 3, fat LTO, 1 codegen unit (see [profile.release] in Cargo.toml).
-cargo build --release
+if ($Unlimited) {
+    # Separate target dir, so the normal and unlimited builds don't keep rebuilding each other.
+    cargo build --release --features unlimited --target-dir target\unlimited
+    $elf = "target\unlimited\thumbv8m.main-none-eabihf\release\cube-rs"
+    $dist = Join-Path $PSScriptRoot "..\dist-unlimited"
+} else {
+    cargo build --release
+    $elf = "target\thumbv8m.main-none-eabihf\release\cube-rs"
+    $dist = Join-Path $PSScriptRoot "..\dist"
+}
 if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
-
-$elf = "target\thumbv8m.main-none-eabihf\release\cube-rs"
-$dist = Join-Path $PSScriptRoot "..\dist"
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item $elf (Join-Path $dist "cube-rs.elf") -Force
 & $picotool uf2 convert -t elf $elf -t uf2 (Join-Path $dist "cube-rs.uf2") --family rp2350-arm-s

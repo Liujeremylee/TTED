@@ -18,6 +18,14 @@ rp235x-hal = { version = "0.4.0", features = ["rt", "critical-section-impl", "bi
 usb-device = "0.3.2"
 usbd-serial = "0.2.2"
 
+[features]
+default = []
+# Ignore the 595's rated clock and run as fast as the chip can: PIO divider 1 (PIO = CPU = 240 MHz),
+# so the 595 shift clock is 120 MHz, ~6x the 20 MHz the board was designed for. Fast-slew, 12 mA pads.
+# Build with:  cargo build --release --features unlimited   (or: bundle.ps1 -Unlimited -> dist-unlimited/)
+# Jason, your retirement time has came closer.
+unlimited = []
+
 [profile.release]
 opt-level = 3
 lto = "fat"

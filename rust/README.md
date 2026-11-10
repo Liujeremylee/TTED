@@ -38,6 +38,16 @@ bit for bit, and that the table matches the original CubeLib algorithm.
 - `MAX_SCK_HZ` — 595 clock (20 MHz, as in the original SPI code).
 - `HOLD` — extra PIO cycles per slot. Raise it if you see ghosting between layers (tested: `HOLD = 10` → 78 cycles).
 
+## `unlimited` feature: ignore the 595 clock
+`cargo build --release --features unlimited`, or `bundle.ps1 -Unlimited` → `../dist-unlimited/cube-rs.uf2`.
+
+The PIO runs at the full CPU clock (divider 1, the fastest possible), so the 595 clock is **120 MHz**. That's
+about 6× what a 74HC595 is rated for at 3.3 V. The latch/clock/data pads are set to fast slew and 12 mA.
+Measured: **72,726 full brightness cycles/s**, every layer refreshed **727,260 times/s**, 275 ns per word.
+The Pico's output is exact, but the 595s probably can't keep up, so expect wrong LEDs. `-` steps the clock
+down while it runs (60, 40, 30 MHz ...). The pin-capture self-test only works at 30 MHz (CPU/4) and slower;
+faster than that it reports SKIPPED.
+
 ## Windows build notes
 - The host build tools need `dlltool` from Rust's GNU toolchain `self-contained` folder on PATH; `bundle.ps1` adds it.
 - `Cargo.lock` pins `winapi-util 0.1.9`, `parking_lot 0.12.3`, `parking_lot_core 0.9.10` and `term 1.1.0`. These are

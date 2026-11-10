@@ -1,0 +1,2 @@
+dd7f7f8e4a6265c1c5a1fcdfc9e0a3fea3103be7582c96113a869e610e9ecf52  cube-rs.uf2
+c6ac04b4d84d0b1f03b93c9a901e99fe6db0da2913981fffaf142e17e54b09e5  cube-rs.elf

@@ -49,11 +49,23 @@ const XTAL_HZ: u32 = 12_000_000;
 const PLL_SYS_240MHZ: hal::pll::PLLConfig =
     hal::pll::PLLConfig { vco_freq: fugit::HertzU32::MHz(1440), refdiv: 1, post_div1: 6, post_div2: 1 };
 /// The 595 shift clock the original SPI code used. Raise it to go faster if your 595s and wiring allow.
+#[cfg(not(feature = "unlimited"))]
 const MAX_SCK_HZ: u32 = 20_000_000;
+/// `--features unlimited`: ignore the 595's rating. CPU/2 = 120 MHz means PIO clock divider 1, the fastest
+/// the PIO can run: one word every 66 PIO cycles = 275 ns. A 74HC595 at 3.3 V is rated for roughly 20 MHz,
+/// so expect wrong LEDs on the cube; the Pico side is still exact.
+// Jason, your retirement time has came closer.
+#[cfg(feature = "unlimited")]
+const MAX_SCK_HZ: u32 = 120_000_000;
+/// PIO1 can sample the pins (self-test, timing) only up to this PIO divider; faster clocks skip that check.
+const CAPTURE_MIN_DIV: u16 = 4;
 /// Extra PIO cycles per slot. 0 = fastest. Raise it if you see ghosting between layers.
 const HOLD: u32 = 0;
 /// Limits for the '+'/'-' 595 clock commands: CPU/3/2 = 40 MHz ... CPU/24/2 = 5 MHz.
+#[cfg(not(feature = "unlimited"))]
 const MIN_DIV: u16 = 3;
+#[cfg(feature = "unlimited")]
+const MIN_DIV: u16 = 1;
 const MAX_DIV: u16 = 24;
 
 static USB_DEV: Mutex<RefCell<Option<UsbDevice<'static, hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
@@ -187,7 +199,8 @@ impl<B: InputPin> Ctx<'_, B> {
 
         let mut cap = [0u32; 3 * SLOTS];
         let mut st = [0u32; 3 * SLOTS];
-        let got = self.cube.capture(&mut cap, &mut st);
+        let can_capture = self.cube.pio_div >= CAPTURE_MIN_DIV;
+        let got = if can_capture { self.cube.capture(&mut cap, &mut st) } else { 0 };
         let mut offset = None;
         if got == cap.len() {
             for k in 0..SLOTS {
@@ -200,11 +213,14 @@ impl<B: InputPin> Ctx<'_, B> {
         self.cube.data = saved;
         self.cube.show();
 
-        let ok = bad_words == 0 && offset.is_some();
+        let ok = bad_words == 0 && (offset.is_some() || !can_capture);
         if verbose {
             say!("self-test: table vs original algorithm: {} of {} words differ\r\n", bad_words, SLOTS);
             match offset {
                 Some(_) => say!("self-test: {} words captured on GP1-3 = table, bit for bit: PASS\r\n", got),
+                None if !can_capture => say!(
+                    "self-test: pin capture SKIPPED: the 595 clock (CPU/{}/2) is too fast for PIO1 to sample (needs CPU/{} or slower)\r\n",
+                    self.cube.pio_div, CAPTURE_MIN_DIV),
                 None => {
                     say!("self-test: pin capture got {} words, NOT equal to the table: FAIL\r\n", got);
                     for i in 0..got.min(6) {
@@ -223,6 +239,9 @@ impl<B: InputPin> Ctx<'_, B> {
         let pio_hz = sys / div;
         let cyc = cube::pio_cycles(self.cube.hold);
         say!("\r\n=== TTED LED cube - Rust, PIO + DMA refresh ===\r\n");
+        if cfg!(feature = "unlimited") {
+            say!("UNLIMITED build: 595 clock limit ignored, fast-slew 12 mA pads\r\n");
+        }
         say!("CPU {} MHz | PIO {} MHz (CPU/{}) | 595 shift clock {} MHz\r\n", sys / 1_000_000, pio_hz / 1_000_000, div, pio_hz / 2_000_000);
         say!("PIO program: {} instructions, {} PIO cycles per slot (32 bits x 2 + 2 latch; next word pulled during the latch)\r\n",
             if self.cube.hold == 0 { 4 } else { 6 }, cyc);
@@ -245,8 +264,10 @@ impl<B: InputPin> Ctx<'_, B> {
         // Measured: time between words on the pins (PIO1 capture, CPU cycle counter).
         let mut cap = [0u32; 3 * SLOTS];
         let mut st = [0u32; 3 * SLOTS];
-        let got = self.cube.capture(&mut cap, &mut st);
-        if got > 1 {
+        let got = if self.cube.pio_div >= CAPTURE_MIN_DIV { self.cube.capture(&mut cap, &mut st) } else { usize::MAX };
+        if got == usize::MAX {
+            say!("measured on the pins: skipped (too fast for PIO1 to sample; the DMA pass count above is the measurement)\r\n");
+        } else if got > 1 {
             let span = st[got - 1].wrapping_sub(st[0]) as u64;
             let per = span * 1000 / (got as u64 - 1); // milli-cycles
             say!("measured on the pins: one word every {}.{:03} CPU cycles = {} ns ({} PIO cycles)\r\n",
@@ -388,9 +409,23 @@ fn main() -> ! {
     // ---- pins ----
     let sio = hal::Sio::new(pac.SIO);
     let pins = hal::gpio::Pins::new(pac.IO_BANK0, pac.PADS_BANK0, sio.gpio_bank0, &mut pac.RESETS);
-    let _latch = pins.gpio1.into_function::<hal::gpio::FunctionPio0>();
-    let _sck = pins.gpio2.into_function::<hal::gpio::FunctionPio0>();
-    let _data = pins.gpio3.into_function::<hal::gpio::FunctionPio0>();
+    #[allow(unused_mut)]
+    let mut _latch = pins.gpio1.into_function::<hal::gpio::FunctionPio0>();
+    #[allow(unused_mut)]
+    let mut _sck = pins.gpio2.into_function::<hal::gpio::FunctionPio0>();
+    #[allow(unused_mut)]
+    let mut _data = pins.gpio3.into_function::<hal::gpio::FunctionPio0>();
+    #[cfg(feature = "unlimited")]
+    {
+        // Sharpest edges the pads can make: needed for a 120 MHz clock on GP2.
+        use hal::gpio::{OutputDriveStrength::TwelveMilliAmps, OutputSlewRate::Fast};
+        _latch.set_slew_rate(Fast);
+        _latch.set_drive_strength(TwelveMilliAmps);
+        _sck.set_slew_rate(Fast);
+        _sck.set_drive_strength(TwelveMilliAmps);
+        _data.set_slew_rate(Fast);
+        _data.set_drive_strength(TwelveMilliAmps);
+    }
     let button1 = pins.gpio13.into_pull_up_input();
     let _button2 = pins.gpio10.into_pull_up_input();
     let _button3 = pins.gpio11.into_pull_up_input();
