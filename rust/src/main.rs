@@ -11,6 +11,8 @@
 
 mod cube;
 mod quadrum;
+#[cfg(feature = "unlimited")]
+mod overclock;
 
 use core::cell::RefCell;
 use core::fmt::Write as _;
@@ -59,6 +61,9 @@ const MAX_SCK_HZ: u32 = 20_000_000;
 const MAX_SCK_HZ: u32 = 120_000_000;
 /// PIO1 can sample the pins (self-test, timing) only up to this PIO divider; faster clocks skip that check.
 const CAPTURE_MIN_DIV: u16 = 4;
+/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz.
+#[cfg(feature = "unlimited")]
+const BOOT_STEP: usize = 0;
 /// Extra PIO cycles per slot. 0 = fastest. Raise it if you see ghosting between layers.
 const HOLD: u32 = 0;
 /// Limits for the '+'/'-' 595 clock commands: CPU/3/2 = 40 MHz ... CPU/24/2 = 5 MHz.
@@ -114,6 +119,12 @@ struct Ctx<'a, B: InputPin> {
     mode: u8,
     rng: u32,
     boot_test: Option<bool>,
+    #[cfg(feature = "unlimited")]
+    wd: hal::Watchdog,
+    #[cfg(feature = "unlimited")]
+    step: usize,
+    #[cfg(feature = "unlimited")]
+    crashed: Option<u32>,
 }
 
 impl<B: InputPin> Ctx<'_, B> {
@@ -131,6 +142,8 @@ impl<B: InputPin> Ctx<'_, B> {
     fn wait(&mut self, ms: u32) -> Result<(), Next> {
         let start = self.now_us();
         loop {
+            #[cfg(feature = "unlimited")]
+            self.wd.feed();
             match CMD.swap(0, Ordering::Relaxed) {
                 0 => {}
                 b'm' | b'M' => self.report(),
@@ -148,6 +161,12 @@ impl<B: InputPin> Ctx<'_, B> {
                     say!("595 clock {:.2} MHz (CPU/{}) -> {} full PWM cycles/s{}\r\n",
                         pio_hz as f32 / 2e6, new, pio_hz / (cyc * SLOTS as u32),
                         if new < 6 { "  [above the 20 MHz the board was designed for: check the cube carefully]" } else { "" });
+                }
+                #[cfg(feature = "unlimited")]
+                c @ (b'>' | b'<') => {
+                    let last = overclock::STEPS.len() - 1;
+                    let to = if c == b'>' { (self.step + 1).min(last) } else { self.step.saturating_sub(1) };
+                    self.set_clock_step(to);
                 }
                 b'h' | b'H' | b'?' => help(),
                 c => say!("unknown command '{}' (h = help)\r\n", c as char),
@@ -233,6 +252,61 @@ impl<B: InputPin> Ctx<'_, B> {
         ok
     }
 
+    /// Overclock (or underclock) CPU + PIO to STEPS[to], then check that everything still works.
+    #[cfg(feature = "unlimited")]
+    fn set_clock_step(&mut self, to: usize) {
+        let s = &overclock::STEPS[to];
+        if to == self.step {
+            say!("CPU/PIO already at {} MHz (end of the overclock table)\r\n", s.mhz);
+            return;
+        }
+        let mv = overclock::millivolts(s.vsel);
+        say!("switching CPU/PIO to {} MHz: core {}.{:02} V, flash CPU/{} ...\r\n", s.mhz, mv / 1000, (mv % 1000) / 10, s.qmi_div);
+        overclock::mark_attempt(to); // if this clock hangs the chip, the watchdog reboots at 240 MHz and says so
+        self.wd.feed();
+        self.cube.sys_hz = overclock::change(self.step, to);
+        self.step = to;
+        self.stability_check();
+    }
+
+    /// PIO + DMA + CPU check at the current clock.
+    #[cfg(feature = "unlimited")]
+    fn stability_check(&mut self) {
+        // PIO/DMA: pin capture needs the PIO at CPU/4 or slower, so drop to that for the test only.
+        let div = self.cube.pio_div;
+        self.cube.set_pio_div(CAPTURE_MIN_DIV);
+        let pins_ok = self.selftest(false);
+        self.cube.set_pio_div(div);
+        self.wd.feed();
+        // CPU: 2000 random tables, fast builder vs reference.
+        let mut data = [0u8; LEDS];
+        let mut a = [0u32; SLOTS];
+        let mut b = [0u32; SLOTS];
+        let mut tmp = cube::Scratch::new();
+        let mut wrong = 0;
+        for _ in 0..2000 {
+            for d in data.iter_mut() {
+                *d = self.random() as u8;
+            }
+            cube::build(&data, &mut a, &mut tmp);
+            cube::build_v1(&data, &mut b);
+            if a != b {
+                wrong += 1;
+            }
+        }
+        self.wd.feed();
+        // Refresh rate at this clock (DMA pass counter over 250 ms).
+        cube::PASSES.store(0, Ordering::Relaxed);
+        let t0 = self.now_us();
+        cube::passes_irq_enable(true);
+        self.timer.delay_ms(250);
+        cube::passes_irq_enable(false);
+        let passes = cube::PASSES.load(Ordering::Relaxed) as u64 * 1_000_000 / (self.now_us() - t0);
+        let pio_hz = self.cube.sys_hz / self.cube.pio_div as u32;
+        say!("{} MHz: PIO/DMA pin self-test {} | CPU: {} of 2000 tables wrong | {} full PWM cycles/s, 595 clock {} MHz\r\n",
+            self.cube.sys_hz / 1_000_000, if pins_ok { "PASS" } else { "FAIL" }, wrong, passes, pio_hz / 2_000_000);
+    }
+
     fn report(&mut self) {
         let sys = self.cube.sys_hz;
         let div = self.cube.pio_div as u32;
@@ -253,7 +327,11 @@ impl<B: InputPin> Ctx<'_, B> {
         cube::PASSES.store(0, Ordering::Relaxed);
         let t0 = self.now_us();
         cube::passes_irq_enable(true);
+        #[cfg(feature = "unlimited")]
+        self.wd.feed();
         self.timer.delay_ms(1000);
+        #[cfg(feature = "unlimited")]
+        self.wd.feed();
         cube::passes_irq_enable(false);
         let us = self.now_us() - t0;
         let passes = cube::PASSES.load(Ordering::Relaxed) as u64 * 1_000_000 / us;
@@ -361,6 +439,15 @@ impl<B: InputPin> Ctx<'_, B> {
         let qmi = unsafe { &*pac::QMI::ptr() };
         let t = qmi.m0_timing().read().bits();
         say!("flash: QMI clkdiv {} -> {} MHz flash clock\r\n", t & 0xFF, sys / 1_000_000 / (t & 0xFF).max(1));
+        #[cfg(feature = "unlimited")]
+        {
+            let mv = overclock::millivolts(overclock::vreg_vsel());
+            say!("overclock: step {} of {} | core {}.{:02} V | '>' faster, '<' slower\r\n",
+                self.step, overclock::STEPS.len() - 1, mv / 1000, (mv % 1000) / 10);
+            if let Some(m) = self.crashed {
+                say!("last reset: watchdog, after the chip hung at {} MHz -> started at the safe clock\r\n", m);
+            }
+        }
         match self.boot_test {
             Some(true) => say!("boot self-test: PASS\r\n"),
             Some(false) => say!("boot self-test: FAIL (send 't' for details)\r\n"),
@@ -385,6 +472,9 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
 
     // ---- clocks: 240 MHz system, 48 MHz USB ----
+    // Read the crash memory before anything else touches the watchdog.
+    #[cfg(feature = "unlimited")]
+    let crashed_at = overclock::crashed_at();
     let mut watchdog = hal::Watchdog::new(pac.WATCHDOG);
     let xosc = hal::xosc::setup_xosc_blocking(pac.XOSC, XTAL_HZ.Hz()).unwrap();
     watchdog.enable_tick_generation((XTAL_HZ / 1_000_000) as u16);
@@ -474,11 +564,25 @@ fn main() -> ! {
         mode: 0,
         rng: 0x1234_5678 ^ (timer.get_counter().ticks() as u32),
         boot_test: None,
+        #[cfg(feature = "unlimited")]
+        wd: watchdog,
+        #[cfg(feature = "unlimited")]
+        step: 0,
+        #[cfg(feature = "unlimited")]
+        crashed: crashed_at,
     };
     if ctx.rng == 0 {
         ctx.rng = 1;
     }
     ctx.boot_test = Some(ctx.selftest(false));
+    #[cfg(feature = "unlimited")]
+    {
+        ctx.wd.start(fugit::MicrosDurationU32::millis(3000));
+        // Boot overclocked, unless the previous run hung at an overclock (then stay at 240 MHz).
+        if ctx.crashed.is_none() && BOOT_STEP > 0 {
+            ctx.set_clock_step(BOOT_STEP);
+        }
+    }
 
     loop {
         let r = match ctx.mode {
@@ -679,10 +783,14 @@ fn USBCTRL_IRQ() {
                 if let Ok(n) = ser.read(&mut buf) {
                     for &b in &buf[..n] {
                         match b {
-                            b'b' | b'B' => hal::reboot::reboot(
+                            b'b' | b'B' => {
+                                // A running watchdog would reset the chip in the middle of flashing.
+                                unsafe { (*pac::WATCHDOG::ptr()).ctrl().modify(|_, w| w.enable().clear_bit()) };
+                                hal::reboot::reboot(
                                 hal::reboot::RebootKind::BootSel { picoboot_disabled: false, msd_disabled: false },
                                 hal::reboot::RebootArch::Normal,
-                            ),
+                                )
+                            }
                             b'\r' | b'\n' | b' ' => {}
                             c => CMD.store(c, Ordering::Relaxed),
                         }

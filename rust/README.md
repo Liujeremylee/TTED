@@ -48,6 +48,14 @@ The Pico's output is exact, but the 595s probably can't keep up, so expect wrong
 down while it runs (60, 40, 30 MHz ...). The pin-capture self-test only works at 30 MHz (CPU/4) and slower;
 faster than that it reports SKIPPED.
 
+**Overclocking the PIO (unlimited build only):** `>` / `<` over USB serial step CPU = PIO clock through
+240 / 264 / 288 / 300 / 320 / 360 / 400 MHz (`src/overclock.rs`). The core voltage goes up to 1.30 V at most;
+the regulator's voltage limit is never disabled. The flash clock stays at or below 80 MHz. After each step the
+firmware runs a PIO/DMA pin self-test, compares 2,000 table builds against the reference, and measures the
+refresh rate. A watchdog reboots at 240 MHz if a step hangs the chip, and `m` then reports the clock that failed.
+**Tested on the board so far: 240 and 264 MHz** (264 MHz: all checks passed, 79,999 full brightness cycles/s).
+Higher steps are untested. The firmware boots at 240 MHz (`BOOT_STEP = 0` in `src/main.rs`).
+
 ## Windows build notes
 - The host build tools need `dlltool` from Rust's GNU toolchain `self-contained` folder on PATH; `bundle.ps1` adds it.
 - `Cargo.lock` pins `winapi-util 0.1.9`, `parking_lot 0.12.3`, `parking_lot_core 0.9.10` and `term 1.1.0`. These are
