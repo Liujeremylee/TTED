@@ -1,0 +1,11 @@
+[build]
+target = "thumbv8m.main-none-eabihf"   # RP2350 Cortex-M33 with FPU
+
+[target.thumbv8m.main-none-eabihf]
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "target-cpu=cortex-m33",
+]
+# `cargo run --release` flashes the board (it must be in BOOTSEL mode: send 'b' over USB serial, or hold BOOTSEL while plugging in)
+runner = "picotool load -u -v -x -t elf"

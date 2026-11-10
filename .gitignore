@@ -1,0 +1,6 @@
+# Rust build output
+rust/target/
+# Large debug ELF (rebuild with rust/bundle.ps1); the UF2 and checksums are kept
+dist/cube-rs.elf
+# Local backup of the board's MicroPython firmware (660 KB)
+firmware-backup/
