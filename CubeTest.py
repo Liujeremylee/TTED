@@ -29,7 +29,6 @@ def advance_one_layer(delay):
         sleep_ms(delay)
 
 
-#3000Hz works for a Pico2, but may be too fast for an original Pico
 print("Look at your cube from the front. That's the side with the buttons on it.")
 leds.fill(10)	#this sets all of the LEDs in the matrix to maximum brightness, but does not turn them on... the CubeLib.refresh_layers will do that, one layer at a time.
 print("We will use the leftmost button to advance through our tests.")
@@ -42,11 +41,11 @@ print("The second from the right layer pad should now be HIGH and the second lay
 advance_one_layer(5)
 print("The middle layer pad should now be HIGH. All other LED pads should be LOW.")
 advance_one_layer(5)
-print("The middle layer pad should now be HIGH. All other LED pads should be LOW.")
-advance_one_layer(5)
 print("The second pad from the left should now be high and your second layer from the bottom should be ON.")
 advance_one_layer(5)
 print("The leftmost layer pad should now be high and your bottom layer should be turned on.")
+advance_one_layer(5)
+print("We're back to the start: the rightmost layer pad is HIGH and the TOP layer is ON again.")
 advance_one_layer(5)
 print("The LED cube works by rotating through these layers rapidly. Try pushing the button really, really fast.")
       
@@ -64,11 +63,10 @@ for t in range(10,1,-1):
         sleep_ms(t)
         CubeLib.refresh_layers(0)
         
-print("Now I'll let a timer interrupt routine take over, so that the layers advance automatically using background routines.")
-timer=Timer()
-timer.init(freq=3000, mode=Timer.PERIODIC, callback=CubeLib.refresh_layers)	#calls the "refresh_layers" function in CubeLib 3000 times every second
-                                                    #3000Hz works for a Pico2, but may be too fast for an original Pico
-print("Now the cube is refreshing 3000 times every second... so it looks like all the LEDs are on all the time.")
+print("Now I'll let the Pico's PIO and DMA hardware take over, so that the layers advance automatically with no CPU work at all.")
+leds.start()		#hardware refresh: PIO shifts the data into the 595s, DMA feeds it, the CPU is free
+print(leds.info())
+print("Now the cube is refreshing about 100,000 layers every second... so it looks like all the LEDs are on all the time.")
 print("Did you notice that the LEDs look slightly less bright than they did when we were keeping each layer on?")
 print("That's because each LED is now only on for 1/5 of the time. But we can dim this even more using PWM.")
 advance_one_layer(5)

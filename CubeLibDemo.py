@@ -25,9 +25,8 @@ print (leds.data)
 leds.xy_map=(27,25,24,19,16, 28,30,20,22,23, 29,31,21,17,4, 13,26,3,1,0, 15,14,5,6,7) #for two-sided board
 leds.layer_map=(9,10,11,8,12)	#depending on how you've wired your layers this might be 12,8,11,10,9
 
-timer=Timer()
-timer.init(freq=3000, mode=Timer.PERIODIC, callback=CubeLib.refresh_layers)	#calls the "refresh_layers" function in CubeLib 3000 times every second
-                                                    #3000Hz works for a Pico2, but may be too fast for an original Pico
+leds.start()		#starts the PIO/DMA hardware refresh (~10,000 full brightness cycles per second, almost no CPU)
+print(leds.info())
 
 #************************ The section above MUST be included for initialization... now you're good to code *****************
 def animations():

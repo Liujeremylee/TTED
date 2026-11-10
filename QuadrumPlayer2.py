@@ -29,12 +29,8 @@ leds.xy_map = (
 
 leds.layer_map = (9,10,11,8,12)
 
-timer = Timer()
-timer.init(
-    freq=3000,
-    mode=Timer.PERIODIC,
-    callback=CubeLib.refresh_layers
-)
+leds.start()    # PIO/DMA hardware refresh
+print(leds.info())
 
 #******************************* Quadrum Loader ******************************
 
@@ -104,7 +100,7 @@ class QuadrumAnimation:
 
         flag = raw[1]
         self.bits_per_voxel = raw[2]
-        self.frame_count = raw[3]
+        self.frame_count = raw[3] | (raw[4] << 8)    # 16-bit little-endian frame count
 
         voxels = self.size * self.size * self.size
 
