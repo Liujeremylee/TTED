@@ -29,7 +29,18 @@ To flash the UF2 by hand: hold BOOTSEL while plugging the Pico in (or send `b` o
 ## USB serial commands (any terminal, any baud rate)
 `m` measure & report · `t` self-test · `n` next animation · `+`/`-` faster/slower 595 clock · `b` reboot to BOOTSEL · `h` help
 
-Button 1 (GP13) also switches the animation (CubeLib demo ↔ Quadrum `TTED.txt`).
+Button 1 (GP13) also switches to the next animation.
+
+**Presets by keyword:** `@` + a name + Enter, e.g. `@fire`, `@lava`, `@bounce`. A part of the name or the number from
+`@list` also works. The chosen preset then repeats. `@auto` goes back to playing them all one after another,
+`@next` skips, `@off` turns the LEDs off, `@list` shows them all. Presets: plasma, twinkle, plane sweep, shells,
+double helix, orbits, diagonal wave, bouncing balls, fire, lightning, heartbeat, fountain, tornado, lava lamp,
+warp, fill (`src/lightshow.rs`); rain, ripple, spinner, fireworks, sphere pulse, corkscrew, snake
+(`src/animations.rs`); CubeLib demo; Quadrum `TTED.txt`.
+
+**From the PC:** `python tools/cube_control.py` finds the cube and gives a `cube>` prompt where you type just the
+keyword (`fire`, `auto`, `off`, `measure` ...). `python tools/cube_control.py fire` switches once and exits.
+Needs `pip install pyserial`; close any other program using the cube's port first.
 
 The self-test uses PIO1 as a logic analyzer on GP1–GP3. It checks that the words reaching the 595s match the table
 bit for bit, and that the table matches the original CubeLib algorithm.

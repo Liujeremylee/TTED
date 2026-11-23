@@ -83,6 +83,55 @@ static USB_DEV: Mutex<RefCell<Option<UsbDevice<'static, hal::usb::UsbBus>>>> = M
 static SERIAL: Mutex<RefCell<Option<SerialPort<'static, hal::usb::UsbBus>>>> = Mutex::new(RefCell::new(None));
 static CMD: AtomicU8 = AtomicU8::new(0);
 
+/// A '@keyword' line being typed over USB serial (filled by the USB interrupt).
+struct Line {
+    typing: bool,
+    ready: bool,
+    buf: heapless::Vec<u8, 32>,
+}
+static LINE: Mutex<RefCell<Line>> =
+    Mutex::new(RefCell::new(Line { typing: false, ready: false, buf: heapless::Vec::new() }));
+
+/// The finished '@keyword' line, if one has arrived.
+fn take_line() -> Option<heapless::Vec<u8, 32>> {
+    critical_section::with(|cs| {
+        let mut l = LINE.borrow_ref_mut(cs);
+        if l.ready {
+            l.ready = false;
+            Some(core::mem::take(&mut l.buf))
+        } else {
+            None
+        }
+    })
+}
+
+/// Lower-case letters and digits only: "Plane Sweep" -> "planesweep".
+fn norm(s: &[u8]) -> heapless::Vec<u8, 32> {
+    s.iter().filter(|c| c.is_ascii_alphanumeric()).map(|c| c.to_ascii_lowercase()).take(32).collect()
+}
+
+/// Find a mode by name: exact match first, then a name starting with it, then a name containing it.
+/// A number picks the mode with that number in the '@list'.
+fn find_mode(w: &[u8]) -> Option<u8> {
+    if !w.is_empty() && w.iter().all(u8::is_ascii_digit) {
+        let n = core::str::from_utf8(w).ok()?.parse::<u8>().ok()?;
+        return (n < MODES).then_some(n);
+    }
+    let names = || (0..MODES).map(|m| (m, norm(mode_name(m).as_bytes())));
+    names()
+        .find(|(_, n)| n[..] == *w)
+        .or_else(|| names().find(|(_, n)| n.starts_with(w)))
+        .or_else(|| names().find(|(_, n)| n.windows(w.len()).any(|x| x == w)))
+        .map(|(m, _)| m)
+        .or_else(|| {
+            // forgiving: "bounce" -> "bouncing balls". The name sharing the longest start with the word wins,
+            // if that start is 4+ letters and at most 2 letters short of the word.
+            let common = |n: &[u8]| n.iter().zip(w).take_while(|(a, b)| a == b).count();
+            let (m, best) = names().map(|(m, n)| (m, common(&n))).max_by_key(|&(_, k)| k)?;
+            (best >= 4 && best + 2 >= w.len()).then_some(m)
+        })
+}
+
 /// Write to USB serial; gives up after a few ms if nobody is reading, so animations never stall.
 fn out(s: &str) {
     let b = s.as_bytes();
@@ -131,9 +180,50 @@ struct Ctx<'a, B: InputPin> {
     step: usize,
     #[cfg(feature = "unlimited")]
     crashed: Option<u32>,
+    /// Mode picked by a '@keyword': the main loop switches to it instead of the next mode.
+    jump: Option<u8>,
+    /// true after a '@keyword' pick: keep repeating that preset instead of moving on ('@auto' clears it).
+    hold: bool,
 }
 
 impl<B: InputPin> Ctx<'_, B> {
+    /// Handle a '@keyword' line. Some(Err(Next)) = leave the current animation (the main loop then reads `jump`).
+    fn keyword(&mut self, line: &[u8]) -> Option<Result<(), Next>> {
+        let w = norm(line);
+        match &w[..] {
+            b"" => None,
+            b"list" | b"help" | b"presets" => {
+                list_modes(self.mode, self.hold);
+                None
+            }
+            b"auto" | b"cycle" | b"loop" => {
+                self.hold = false;
+                say!("auto: the presets play one after another\r\n");
+                if self.mode == OFF {
+                    self.jump = Some(0);
+                    return Some(Err(Next));
+                }
+                None
+            }
+            b"next" | b"skip" => Some(Err(Next)),
+            b"off" | b"dark" | b"stop" | b"blackout" => {
+                self.jump = Some(OFF);
+                Some(Err(Next))
+            }
+            _ => match find_mode(&w) {
+                Some(m) => {
+                    self.jump = Some(m);
+                    self.hold = true;
+                    Some(Err(Next))
+                }
+                None => {
+                    say!("unknown preset '{}' (@list shows them all)\r\n", core::str::from_utf8(line).unwrap_or("?"));
+                    None
+                }
+            },
+        }
+    }
+
     fn now_us(&self) -> u64 {
         self.timer.get_counter().ticks()
     }
@@ -176,6 +266,11 @@ impl<B: InputPin> Ctx<'_, B> {
                 }
                 b'h' | b'H' | b'?' => help(),
                 c => say!("unknown command '{}' (h = help)\r\n", c as char),
+            }
+            if let Some(line) = take_line() {
+                if let Some(r) = self.keyword(&line) {
+                    return r;
+                }
             }
             let pressed = self.button.is_low().unwrap_or(false);
             if pressed && !self.btn_down {
@@ -481,6 +576,7 @@ impl<B: InputPin> Ctx<'_, B> {
 fn help() {
     out("\r\nTTED LED cube (Rust). Commands: m = measure, t = self-test, n = next animation,\r\n");
     out("+ / - = faster / slower 595 clock (default 20 MHz), b = BOOTSEL (flash mode), h = help\r\n");
+    out("Presets by name: @plasma, @fire, @lava ... + Enter (@list = all of them, @auto = cycle, @off = dark)\r\n");
 }
 
 #[hal::entry]
@@ -587,6 +683,8 @@ fn main() -> ! {
         step: 0,
         #[cfg(feature = "unlimited")]
         crashed: crashed_at,
+        jump: None,
+        hold: false,
     };
     if ctx.rng == 0 {
         ctx.rng = 1;
@@ -608,13 +706,19 @@ fn main() -> ! {
             m if m < lightshow::COUNT => lightshow::play(&mut ctx, m),
             m if m < SHOWS => animations::play(&mut ctx, m - lightshow::COUNT),
             DEMO => demo(&mut ctx),
+            OFF => {
+                ctx.cube.clear();
+                ctx.cube.show();
+                ctx.wait(1000)
+            }
             _ => quadrum_play(&mut ctx),
         };
         let next = match r {
-            // button 1 or 'n': go to the next mode
-            Err(Next) => Some((ctx.mode + 1) % MODES),
-            // the light shows and animations play one after another, round and round, until the button is pressed
-            Ok(()) if ctx.mode < SHOWS => Some((ctx.mode + 1) % SHOWS),
+            // a '@keyword' pick, or button 1 / 'n' / '@next': the next mode
+            Err(Next) => Some(ctx.jump.take().unwrap_or(if ctx.mode >= MODES { 0 } else { (ctx.mode + 1) % MODES })),
+            // the light shows and animations play one after another, round and round, unless a '@keyword'
+            // picked one (then it repeats until '@auto')
+            Ok(()) if ctx.mode < SHOWS && !ctx.hold => Some((ctx.mode + 1) % SHOWS),
             // the demo and the Quadrum player repeat
             Ok(()) => None,
         };
@@ -622,7 +726,7 @@ fn main() -> ! {
             ctx.mode = m;
             ctx.cube.clear();
             ctx.cube.show();
-            say!("animation: {}\r\n", mode_name(m));
+            say!("animation: {}{}\r\n", mode_name(m), if ctx.hold && m < SHOWS { "  (repeating; @auto to cycle)" } else { "" });
         }
     }
 }
@@ -632,14 +736,27 @@ const SHOWS: u8 = lightshow::COUNT + animations::COUNT;
 const DEMO: u8 = SHOWS;
 /// Number of modes the button cycles through.
 const MODES: u8 = SHOWS + 2;
+/// '@off': all LEDs dark (not in the button cycle).
+const OFF: u8 = 255;
 
 fn mode_name(mode: u8) -> &'static str {
     match mode {
         m if m < lightshow::COUNT => lightshow::NAMES[m as usize],
         m if m < SHOWS => animations::NAMES[(m - lightshow::COUNT) as usize],
         DEMO => "CubeLib demo",
+        OFF => "off",
         _ => "Quadrum TTED.txt",
     }
+}
+
+/// '@list': every preset with its number, the one playing marked with '>'.
+fn list_modes(current: u8, hold: bool) {
+    out("\r\npresets (type @name or @number, Enter):\r\n");
+    for m in 0..MODES {
+        say!("{} {:2}  {}\r\n", if m == current { '>' } else { ' ' }, m, mode_name(m));
+    }
+    out("also: @auto (cycle through them all), @next, @off, @list\r\n");
+    say!("now: {} ({})\r\n", mode_name(current), if hold { "repeating" } else { "auto" });
 }
 
 fn quadrum_play<B: InputPin>(c: &mut Ctx<B>) -> Result<(), Next> {
@@ -825,7 +942,31 @@ fn USBCTRL_IRQ() {
             if dev.poll(&mut [ser]) {
                 let mut buf = [0u8; 64];
                 if let Ok(n) = ser.read(&mut buf) {
+                    let mut line = LINE.borrow_ref_mut(cs);
                     for &b in &buf[..n] {
+                        // '@keyword' + Enter: collect the keyword (no single-letter commands meanwhile, so the
+                        // 'b' in "@bounce" doesn't reboot). The main loop picks it up in Ctx::wait.
+                        if line.typing {
+                            match b {
+                                b'\r' | b'\n' => {
+                                    line.typing = false;
+                                    line.ready = true;
+                                }
+                                0x08 | 0x7F => {
+                                    line.buf.pop(); // backspace
+                                }
+                                _ => {
+                                    let _ = line.buf.push(b);
+                                }
+                            }
+                            continue;
+                        }
+                        if b == b'@' {
+                            line.typing = true;
+                            line.ready = false;
+                            line.buf.clear();
+                            continue;
+                        }
                         match b {
                             b'b' | b'B' => {
                                 // A running watchdog would reset the chip in the middle of flashing.
