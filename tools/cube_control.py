@@ -85,11 +85,15 @@ Presets
   auto                    play all presets one after another
   next                    skip to the next preset
   off                     all LEDs dark
-Speed
-  speed                   show the current speed (595 clock, CPU clock, refresh rate)
+Speed (all change live, no restart)
+  speed                   show the current speed (595 clock, CPU clock, refresh rate, tempo)
   speed <MHz>             set the 595 clock, e.g. 'speed 84' (fastest clean on this cube), 'speed 21'
+  jason                   Jason's setting: the original design speed, 595 clock 20 MHz, CPU 240 MHz
   faster / slower         595 clock one step up / down
   overclock / underclock  CPU clock one step up / down (fast 'unlimited' build only)
+  tempo <percent>         how fast the animations play: 'tempo 200' = twice as fast, 'tempo 50' = half
+  tempo                   show the tempo
+  reset                   back to defaults: power-up speed (84 MHz), tempo 100%, presets cycling
 Checks
   measure                 full refresh report
   test                    self-test (checks the pins at 595 clocks up to CPU/4)
@@ -211,6 +215,7 @@ def show_list(cube):
             listed.add(num)
     print(f"\n {'-' * (width - 2)}")
     print(" Type a name or number to play it. 'auto' = cycle all, 'off' = dark, 'help' = all commands.")
+    print(" Speed: 'speed 84', 'jason' (original 20 MHz), 'tempo 150' (animation pace), 'reset' (defaults).")
     print("=" * width)
     print()
 
@@ -242,7 +247,8 @@ def run(cube, word):
         cube.send(word)
         # the cube's answer prints before the next prompt (measure / test / clock changes take longer)
         key = w.replace(" ", "")
-        slow = LETTER_COMMANDS.get(key) in ("m", "t", ">", "<") or (key.startswith("speed") and key != "speed")
+        slow = (LETTER_COMMANDS.get(key) in ("m", "t", ">", "<") or (key.startswith("speed") and key != "speed")
+                or key in ("jason", "reset", "default", "defaults"))
         time.sleep(3.0 if slow else 0.3)
 
 
@@ -266,7 +272,8 @@ def main():
     print(f"TTED cube connected on {port}")
     show_list(cube)
     names = [name for _, name, _ in cube.presets()[0]]
-    setup_completion(names + ["list", "auto", "next", "off", "help", "quit", "speed"] + list(LETTER_COMMANDS))
+    setup_completion(names + ["list", "auto", "next", "off", "help", "quit", "speed", "tempo", "jason", "reset"]
+                     + list(LETTER_COMMANDS))
 
     try:
         while cube.running:

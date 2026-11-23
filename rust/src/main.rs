@@ -184,50 +184,104 @@ struct Ctx<'a, B: InputPin> {
     jump: Option<u8>,
     /// true after a '@keyword' pick: keep repeating that preset instead of moving on ('@auto' clears it).
     hold: bool,
+    /// Animation tempo in percent ('@tempo'): frame waits are divided by it. 100 = as written.
+    tempo: u32,
+    /// The PIO divider set at power-up (for '@speed default' / '@reset').
+    boot_div: u16,
 }
 
 impl<B: InputPin> Ctx<'_, B> {
-    /// '@speed': show the speed. '@speed 80': set the 595 clock to the fastest setting at or below 80 MHz
-    /// (unlimited build: picks the CPU clock step and PIO divider; normal build: the divider only).
+    /// '@speed': show the speed. '@speed 80': the fastest 595 clock at or below 80 MHz (unlimited build: picks
+    /// the CPU clock step and PIO divider; normal build: the divider only). '@speed jason': the original design
+    /// speed, 20 MHz at 240 MHz CPU. '@speed default': the power-up setting.
     fn speed(&mut self, arg: &[u8]) {
-        if !arg.is_empty() {
-            let Some(mhz) = core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u32>().ok()) else {
-                say!("speed: give the 595 clock in MHz, e.g. @speed 80\r\n");
-                return;
-            };
-            let target = mhz.saturating_mul(1_000_000); // never above what was asked for
-            // CPU clocks to choose from, lowest first
-            let mut cpus: heapless::Vec<(usize, u32), 16> = heapless::Vec::new();
-            #[cfg(feature = "unlimited")]
-            for (i, s) in overclock::STEPS.iter().enumerate() {
-                let _ = cpus.push((i, s.mhz * 1_000_000));
+        match arg {
+            b"" => {}
+            b"jason" | b"original" | b"stock" => {
+                self.set_speed_mhz(20);
+                say!("Jason's setting: 595 clock 20 MHz (the original SPI speed), CPU 240 MHz\r\n");
             }
-            #[cfg(not(feature = "unlimited"))]
-            let _ = cpus.push((0, self.cube.sys_hz));
-            let mut best: Option<(usize, u16, u32)> = None; // (clock step, PIO divider, 595 clock)
-            for &(step, cpu) in cpus.iter() {
-                for div in MIN_DIV..=MAX_DIV {
-                    let hz = cpu / div as u32 / 2;
-                    if hz <= target && best.map_or(true, |(_, _, b)| hz > b) {
-                        best = Some((step, div, hz)); // strictly faster only: ties keep the lower CPU clock
-                    }
+            b"default" | b"defaults" | b"reset" | b"boot" => self.speed_default(),
+            _ => match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u32>().ok()) {
+                Some(mhz) => self.set_speed_mhz(mhz),
+                None => {
+                    say!("speed: a number of MHz (e.g. @speed 80), jason, or default\r\n");
+                    return;
                 }
-            }
-            let Some((_step, div, _)) = best else {
-                say!("speed: {} MHz is below the slowest setting\r\n", mhz);
-                return;
-            };
-            #[cfg(feature = "unlimited")]
-            if _step != self.step {
-                self.set_clock_step(_step);
-            }
-            self.cube.set_pio_div(div);
+            },
         }
         let cpu = self.cube.sys_hz;
         let div = self.cube.pio_div as u32;
         let pio = cpu / div;
-        say!("speed: 595 clock {:.1} MHz | CPU {} MHz, PIO CPU/{} | {} full brightness cycles/s\r\n",
-            pio as f32 / 2e6, cpu / 1_000_000, div, pio / (cube::pio_cycles(self.cube.hold) * WORDS as u32));
+        say!("speed: 595 clock {:.1} MHz | CPU {} MHz, PIO CPU/{} | {} full brightness cycles/s | tempo {}%\r\n",
+            pio as f32 / 2e6, cpu / 1_000_000, div, pio / (cube::pio_cycles(self.cube.hold) * WORDS as u32), self.tempo);
+    }
+
+    /// Set the 595 clock to the fastest setting at or below `mhz` (ties: the lowest CPU clock).
+    fn set_speed_mhz(&mut self, mhz: u32) {
+        let target = mhz.saturating_mul(1_000_000); // never above what was asked for
+        // CPU clocks to choose from, lowest first
+        let mut cpus: heapless::Vec<(usize, u32), 16> = heapless::Vec::new();
+        #[cfg(feature = "unlimited")]
+        for (i, s) in overclock::STEPS.iter().enumerate() {
+            let _ = cpus.push((i, s.mhz * 1_000_000));
+        }
+        #[cfg(not(feature = "unlimited"))]
+        let _ = cpus.push((0, self.cube.sys_hz));
+        let mut best: Option<(usize, u16, u32)> = None; // (clock step, PIO divider, 595 clock)
+        for &(step, cpu) in cpus.iter() {
+            for div in MIN_DIV..=MAX_DIV {
+                let hz = cpu / div as u32 / 2;
+                if hz <= target && best.map_or(true, |(_, _, b)| hz > b) {
+                    best = Some((step, div, hz)); // strictly faster only: ties keep the lower CPU clock
+                }
+            }
+        }
+        match best {
+            Some((step, div, _)) => self.set_clock(step, div),
+            None => say!("speed: {} MHz is below the slowest setting\r\n", mhz),
+        }
+    }
+
+    /// The power-up speed (unlimited: BOOT_STEP and the boot divider, i.e. 84 MHz).
+    fn speed_default(&mut self) {
+        #[cfg(feature = "unlimited")]
+        let step = BOOT_STEP;
+        #[cfg(not(feature = "unlimited"))]
+        let step = 0;
+        self.set_clock(step, self.boot_div);
+    }
+
+    /// CPU clock step (unlimited build only; ignored otherwise) and PIO divider.
+    fn set_clock(&mut self, _step: usize, div: u16) {
+        #[cfg(feature = "unlimited")]
+        if _step != self.step {
+            self.set_clock_step(_step);
+        }
+        self.cube.set_pio_div(div);
+    }
+
+    /// '@tempo': show the animation tempo. '@tempo 150': 1.5x as fast, '@tempo 50': half speed (25..400 %).
+    fn tempo(&mut self, arg: &[u8]) {
+        if !arg.is_empty() {
+            match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u32>().ok()) {
+                Some(p) => self.tempo = p.clamp(25, 400),
+                None => {
+                    say!("tempo: a percentage, e.g. @tempo 150 (faster) or @tempo 50 (slower); 100 = normal\r\n");
+                    return;
+                }
+            }
+        }
+        say!("tempo: {}% (animations play at {}x speed)\r\n", self.tempo, self.tempo as f32 / 100.0);
+    }
+
+    /// '@reset': power-up speed, normal tempo, all presets cycling.
+    fn reset(&mut self) {
+        self.speed_default();
+        self.tempo = 100;
+        self.hold = false;
+        say!("reset: power-up speed, tempo 100%, presets cycling (auto)\r\n");
+        self.speed(b"");
     }
 
     /// Handle a '@keyword' line. Some(Err(Next)) = leave the current animation (the main loop then reads `jump`).
@@ -257,6 +311,22 @@ impl<B: InputPin> Ctx<'_, B> {
                 self.speed(&w[5..]);
                 None
             }
+            _ if w.starts_with(b"tempo") => {
+                self.tempo(&w[5..]);
+                None
+            }
+            b"jason" | b"jasonssetting" | b"jasons" => {
+                self.speed(b"jason");
+                None
+            }
+            b"reset" | b"default" | b"defaults" => {
+                self.reset();
+                if self.mode == OFF {
+                    self.jump = Some(0);
+                    return Some(Err(Next));
+                }
+                None
+            }
             _ => match find_mode(&w) {
                 Some(m) => {
                     self.jump = Some(m);
@@ -275,10 +345,10 @@ impl<B: InputPin> Ctx<'_, B> {
         self.timer.get_counter().ticks()
     }
 
-    /// Display the current picture, then wait.
+    /// Display the current picture, then wait (scaled by the '@tempo' setting).
     fn frame(&mut self, ms: u32) -> Result<(), Next> {
         self.cube.show();
-        self.wait(ms)
+        self.wait(ms * 100 / self.tempo.max(1))
     }
 
     /// Wait `ms`, handling serial commands and button 1 meanwhile.
@@ -714,6 +784,7 @@ fn main() -> ! {
         NVIC::unmask(pac::Interrupt::DMA_IRQ_0);
     }
 
+    let boot_div = cube.pio_div;
     let mut ctx = Ctx {
         cube,
         anim,
@@ -732,6 +803,8 @@ fn main() -> ! {
         crashed: crashed_at,
         jump: None,
         hold: false,
+        tempo: 100,
+        boot_div,
     };
     if ctx.rng == 0 {
         ctx.rng = 1;
@@ -802,7 +875,7 @@ fn list_modes(current: u8, hold: bool) {
     for m in 0..MODES {
         say!("{} {:2}  {}\r\n", if m == current { '>' } else { ' ' }, m, mode_name(m));
     }
-    out("also: @auto (cycle through them all), @next, @off, @list, @speed, @speed <MHz>\r\n");
+    out("also: @auto, @next, @off, @list, @speed [MHz|jason|default], @tempo [percent], @jason, @reset\r\n");
     say!("now: {} ({})\r\n", mode_name(current), if hold { "repeating" } else { "auto" });
 }
 

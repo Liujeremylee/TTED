@@ -30,9 +30,12 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `off` | `@off` | All LEDs dark (`auto` or any preset name turns them back on) |
 | `measure` | `m` | Refresh report: clocks, measured refresh rate, table build times, self-test result |
 | `test` | `t` | Self-test: table vs the original CubeLib algorithm, and the words on the pins (595 clock ≤ CPU/4) |
-| `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s |
+| `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s, tempo. All speed commands change the cube live |
 | `speed 84` | `@speed 84` | Set the 595 clock to the fastest setting at or below that many MHz (the fast build also picks the CPU clock). 84 = fastest clean on this cube, 21 ≈ the board's design speed. Back to 84 MHz at every power-up |
+| `jason` | `@jason` | Jason's setting: the original design speed, 595 clock 20 MHz with the CPU at 240 MHz |
 | `faster` / `slower` | `+` / `-` | 595 clock one step up / down (CPU ÷ 1, 2, 3 ...) |
+| `tempo 150` | `@tempo 150` | How fast the animations play, in percent: 200 = twice as fast, 50 = half speed (25–400). `tempo` alone shows it |
+| `reset` | `@reset` | Back to defaults: power-up speed (84 MHz), tempo 100 %, presets cycling (`auto`) |
 | `overclock` / `underclock` | `>` / `<` | CPU = PIO clock one step up / down, 240–400 MHz (`unlimited` build only) |
 | `info` | `h` | Firmware help text |
 | `help` | — | This list, in the terminal |
