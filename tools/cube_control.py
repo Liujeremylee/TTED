@@ -2,7 +2,7 @@
 
 Runs on the PC (not on the Pico), talks to the Rust firmware over USB serial.
 
-    python tools/cube_control.py              interactive: type plasma, fire, lava, auto, off, list, quit ...
+    python tools/cube_control.py              interactive: type plasma, fire, lava, list, speed, auto, off, quit ...
     python tools/cube_control.py fire         one-shot: switch to "fire" and exit
     python tools/cube_control.py --port COM14 pick the port by hand (normally found automatically)
 
@@ -24,34 +24,86 @@ except ImportError:
     sys.exit("pyserial is missing: pip install pyserial")
 
 PICO_VID = 0x2E8A
+CUBE_PID = 0x000A  # the Rust cube firmware
 CUBE_SERIAL = "TTED-CUBE"
 
 # Words handled here and sent as the firmware's one-letter commands (everything else goes as "@word").
 LETTER_COMMANDS = {
     "measure": "m", "stats": "m",
     "test": "t", "selftest": "t",
-    "faster": "+", "slower": "-",          # 595 clock
-    "overclock": ">", "underclock": "<",  # CPU/PIO clock (unlimited build)
+    "faster": "+", "slower": "-",          # 595 clock one step
+    "overclock": ">", "underclock": "<",  # CPU/PIO clock one step (unlimited build)
     "info": "h",
 }
 
+# The presets, grouped for the 'list' chart. Names must match the firmware's (its @list gives the numbers);
+# a preset the firmware has but this table doesn't goes under "Other".
+CATEGORIES = [
+    ("Ambient & glow", [
+        ("plasma", "Soft glowing blobs drifting through the cube"),
+        ("lava lamp", "Three big blobs drifting and melting together"),
+        ("heartbeat", "Lub-dub pulse, brightest in the centre"),
+        ("sphere pulse", "A glowing ball growing and shrinking"),
+        ("shells", "Cube-shaped shells pulsing out from the centre"),
+        ("twinkle", "Random stars flashing on and fading out"),
+    ]),
+    ("Waves & sweeps", [
+        ("diagonal wave", "Thin bright bands rolling corner to corner"),
+        ("ripple", "Rings spreading over a water surface"),
+        ("plane sweep", "A wall of light sweeping along each axis"),
+        ("spinner", "A sheet of light spinning like a revolving door"),
+    ]),
+    ("Spirals & orbits", [
+        ("double helix", "Two strands twisting as they climb (DNA)"),
+        ("tornado", "A spinning funnel, narrow at the bottom"),
+        ("corkscrew", "Two comets chasing around the outside, climbing"),
+        ("orbits", "Three planets on tilted orbits around a sun"),
+    ]),
+    ("Particles & physics", [
+        ("bouncing balls", "Three balls bouncing with gravity"),
+        ("fountain", "Sparks spraying up from the middle, falling back"),
+        ("fireworks", "A rocket climbs and bursts into sparks"),
+        ("warp", "Stars rushing from back to front"),
+        ("snake", "A dot wandering through the cube with a tail"),
+        ("fill", "Fills one random LED at a time, then empties"),
+    ]),
+    ("Weather & elements", [
+        ("fire", "Flames rising and flickering from the bottom"),
+        ("lightning", "Flickering cloud on top, bolts striking down"),
+        ("rain", "Drops falling from the top with trails"),
+    ]),
+    ("Classics", [
+        ("cubelib demo", "The original CubeLibDemo.py sequences"),
+        ("quadrum tted.txt", "The Quadrum animation file"),
+    ]),
+]
+
 HELP = """\
-Type a preset name (or part of one, or its number) and press Enter:  plasma, fire, lava, tornado, 3 ...
-  list        all presets (the one playing is marked >)
-  auto        go back to cycling through all of them
-  next        skip to the next one
-  off         all LEDs dark
-  measure     refresh-rate report        test     self-test
-  faster / slower         595 clock up / down a step
-  overclock / underclock  CPU clock up / down a step (unlimited build)
-  quit        leave (the cube keeps playing)"""
+Presets
+  <name>                  play that preset (repeats until 'auto'); part of a name or its number works too
+  list                    all presets, grouped, with what they do (> = playing now)
+  auto                    play all presets one after another
+  next                    skip to the next preset
+  off                     all LEDs dark
+Speed
+  speed                   show the current speed (595 clock, CPU clock, refresh rate)
+  speed <MHz>             set the 595 clock, e.g. 'speed 84' (fastest clean on this cube), 'speed 21'
+  faster / slower         595 clock one step up / down
+  overclock / underclock  CPU clock one step up / down (fast 'unlimited' build only)
+Checks
+  measure                 full refresh report
+  test                    self-test (checks the pins at 595 clocks up to CPU/4)
+  info                    the firmware's own help text
+Other
+  help                    this list
+  quit                    close the terminal (the cube keeps playing)"""
 
 
 def find_port():
     ports = list(serial.tools.list_ports.comports())
     for p in ports:
         # the Rust cube firmware: PID 000A (Windows often reports no serial number)
-        if p.vid == PICO_VID and (p.serial_number == CUBE_SERIAL or p.pid == 0x000A):
+        if p.vid == PICO_VID and (p.serial_number == CUBE_SERIAL or p.pid == CUBE_PID):
             return p.device
     for p in ports:
         if p.vid == PICO_VID:
@@ -100,24 +152,67 @@ class Cube:
         else:
             self.ser.write(f"@{word}\r".encode())
 
-    def preset_names(self):
-        """Ask the cube for its list and return the preset names (for tab completion)."""
+    def ask(self, keyword, wait=0.5):
+        """Send '@keyword' without echoing the answer; return the lines the cube printed."""
         start = len(self.lines)
         self.echo = False
-        self.ser.write(b"@list\r")
-        time.sleep(0.5)
+        self.ser.write(f"@{keyword}\r".encode())
+        time.sleep(wait)
         self.echo = True
-        names = []
-        for line in self.lines[start:]:
-            m = re.match(r"^[ >]\s*\d+\s+(.+)$", line)
+        return self.lines[start:]
+
+    def presets(self):
+        """[(number, name, playing_now)], 'auto' or 'repeating', and the speed line, from the cube."""
+        found, state = [], ""
+        for line in self.ask("list"):
+            m = re.match(r"^([ >])\s*(\d+)\s+(.+)$", line)
             if m:
-                names.append(m.group(1).strip())
-        return names
+                found.append((int(m.group(2)), m.group(3).strip(), m.group(1) == ">"))
+            m = re.match(r"^now: .*\((\w+)\)", line)
+            if m:
+                state = m.group(1)
+        speed = next((l for l in self.ask("speed", 0.3) if l.startswith("speed:")), "")
+        return found, state, speed
 
     def close(self):
         self.running = False
         time.sleep(0.15)
         self.ser.close()
+
+
+def show_list(cube):
+    found, state, speed = cube.presets()
+    if not found:
+        print("  (no answer from the cube)")
+        return
+    by_name = {name.lower(): (num, name, now) for num, name, now in found}
+    playing = next((name for _, name, now in found if now), "?")
+    width = 74
+    print()
+    print("=" * width)
+    print(f" Now playing: {playing}  ({state or '?'})")
+    if speed:
+        print(" " + speed.replace("speed: ", "Speed: "))
+    print("=" * width)
+    listed = set()
+    groups = [(title, items) for title, items in CATEGORIES]
+    others = [(n.lower(), "") for _, n, _ in found if n.lower() not in {k for _, it in CATEGORIES for k, _ in it}]
+    if others:
+        groups.append(("Other", others))
+    for title, items in groups:
+        rows = [(by_name[k], desc) for k, desc in items if k in by_name]
+        if not rows:
+            continue
+        print(f"\n {title.upper()}")
+        print(f" {'-' * (width - 2)}")
+        for (num, name, now), desc in rows:
+            mark = ">" if now else " "
+            print(f" {mark}{num:3}  {name:<17} {desc}")
+            listed.add(num)
+    print(f"\n {'-' * (width - 2)}")
+    print(" Type a name or number to play it. 'auto' = cycle all, 'off' = dark, 'help' = all commands.")
+    print("=" * width)
+    print()
 
 
 def setup_completion(words):
@@ -136,9 +231,24 @@ def setup_completion(words):
     readline.parse_and_bind("tab: complete")
 
 
+def run(cube, word):
+    """One command from the prompt (or the command line)."""
+    w = word.strip().lower()
+    if w in ("list", "presets", "ls"):
+        show_list(cube)
+    elif w in ("help", "?"):
+        print(HELP)
+    else:
+        cube.send(word)
+        # the cube's answer prints before the next prompt (measure / test / clock changes take longer)
+        key = w.replace(" ", "")
+        slow = LETTER_COMMANDS.get(key) in ("m", "t", ">", "<") or (key.startswith("speed") and key != "speed")
+        time.sleep(3.0 if slow else 0.3)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Switch the TTED LED cube's light show by keyword.")
-    ap.add_argument("words", nargs="*", help="keyword(s) to send, then exit (leave out for interactive mode)")
+    ap.add_argument("words", nargs="*", help="command to send, then exit (leave out for interactive mode)")
     ap.add_argument("--port", help="serial port, e.g. COM14 (default: find the cube automatically)")
     args = ap.parse_args()
 
@@ -148,20 +258,15 @@ def main():
     cube = Cube(port)
 
     if args.words:
-        word = " ".join(args.words)
-        cube.send(word)
-        # let the cube's answer print (measure / test / clock steps take a couple of seconds)
-        slow = LETTER_COMMANDS.get(word.lower().replace(" ", "")) in ("m", "t", ">", "<")
-        time.sleep(3.0 if slow else 0.4)
+        run(cube, " ".join(args.words))
+        time.sleep(0.2)
         cube.close()
         return
 
-    print(f"connected to the cube on {port}")
-    names = cube.preset_names()
-    if names:
-        print("presets: " + ", ".join(names))
-    print('type "help" for commands, "quit" to leave\n')
-    setup_completion(names + ["list", "auto", "next", "off", "help", "quit"] + list(LETTER_COMMANDS))
+    print(f"TTED cube connected on {port}")
+    show_list(cube)
+    names = [name for _, name, _ in cube.presets()[0]]
+    setup_completion(names + ["list", "auto", "next", "off", "help", "quit", "speed"] + list(LETTER_COMMANDS))
 
     try:
         while cube.running:
@@ -171,11 +276,8 @@ def main():
                 break
             if word.lower() in ("quit", "exit", "q"):
                 break
-            if word.lower() in ("help", "?"):
-                print(HELP)
-                continue
-            cube.send(word)
-            time.sleep(0.25)  # the cube's reply prints before the next prompt
+            if word:
+                run(cube, word)
     except KeyboardInterrupt:
         print()
     cube.close()

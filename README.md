@@ -24,12 +24,14 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `cube>` prompt | Serial | What it does |
 |---|---|---|
 | *a preset name*, e.g. `fire` | `@fire` | Play that preset; it repeats until `auto`. Part of a name works (`lava`, `helix`, `bounce`), and so does its number from `list` |
-| `list` | `@list` | Show every preset with its number; `>` marks the one playing |
+| `list` | `@list` | Every preset, grouped by kind (ambient, waves, spirals, particles, weather, classics) with a one-line description; `>` marks the one playing, and the current speed is shown on top |
 | `auto` | `@auto` | Play all presets one after another (the start-up behaviour) |
 | `next` | `@next` or `n` | Skip to the next preset (button 1 on GP13 does the same) |
 | `off` | `@off` | All LEDs dark (`auto` or any preset name turns them back on) |
 | `measure` | `m` | Refresh report: clocks, measured refresh rate, table build times, self-test result |
 | `test` | `t` | Self-test: table vs the original CubeLib algorithm, and the words on the pins (595 clock ≤ CPU/4) |
+| `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s |
+| `speed 84` | `@speed 84` | Set the 595 clock to the fastest setting at or below that many MHz (the fast build also picks the CPU clock). 84 = fastest clean on this cube, 21 ≈ the board's design speed. Back to 84 MHz at every power-up |
 | `faster` / `slower` | `+` / `-` | 595 clock one step up / down (CPU ÷ 1, 2, 3 ...) |
 | `overclock` / `underclock` | `>` / `<` | CPU = PIO clock one step up / down, 240–400 MHz (`unlimited` build only) |
 | `info` | `h` | Firmware help text |

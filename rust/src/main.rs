@@ -187,6 +187,49 @@ struct Ctx<'a, B: InputPin> {
 }
 
 impl<B: InputPin> Ctx<'_, B> {
+    /// '@speed': show the speed. '@speed 80': set the 595 clock to the fastest setting at or below 80 MHz
+    /// (unlimited build: picks the CPU clock step and PIO divider; normal build: the divider only).
+    fn speed(&mut self, arg: &[u8]) {
+        if !arg.is_empty() {
+            let Some(mhz) = core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u32>().ok()) else {
+                say!("speed: give the 595 clock in MHz, e.g. @speed 80\r\n");
+                return;
+            };
+            let target = mhz.saturating_mul(1_000_000); // never above what was asked for
+            // CPU clocks to choose from, lowest first
+            let mut cpus: heapless::Vec<(usize, u32), 16> = heapless::Vec::new();
+            #[cfg(feature = "unlimited")]
+            for (i, s) in overclock::STEPS.iter().enumerate() {
+                let _ = cpus.push((i, s.mhz * 1_000_000));
+            }
+            #[cfg(not(feature = "unlimited"))]
+            let _ = cpus.push((0, self.cube.sys_hz));
+            let mut best: Option<(usize, u16, u32)> = None; // (clock step, PIO divider, 595 clock)
+            for &(step, cpu) in cpus.iter() {
+                for div in MIN_DIV..=MAX_DIV {
+                    let hz = cpu / div as u32 / 2;
+                    if hz <= target && best.map_or(true, |(_, _, b)| hz > b) {
+                        best = Some((step, div, hz)); // strictly faster only: ties keep the lower CPU clock
+                    }
+                }
+            }
+            let Some((_step, div, _)) = best else {
+                say!("speed: {} MHz is below the slowest setting\r\n", mhz);
+                return;
+            };
+            #[cfg(feature = "unlimited")]
+            if _step != self.step {
+                self.set_clock_step(_step);
+            }
+            self.cube.set_pio_div(div);
+        }
+        let cpu = self.cube.sys_hz;
+        let div = self.cube.pio_div as u32;
+        let pio = cpu / div;
+        say!("speed: 595 clock {:.1} MHz | CPU {} MHz, PIO CPU/{} | {} full brightness cycles/s\r\n",
+            pio as f32 / 2e6, cpu / 1_000_000, div, pio / (cube::pio_cycles(self.cube.hold) * WORDS as u32));
+    }
+
     /// Handle a '@keyword' line. Some(Err(Next)) = leave the current animation (the main loop then reads `jump`).
     fn keyword(&mut self, line: &[u8]) -> Option<Result<(), Next>> {
         let w = norm(line);
@@ -209,6 +252,10 @@ impl<B: InputPin> Ctx<'_, B> {
             b"off" | b"dark" | b"stop" | b"blackout" => {
                 self.jump = Some(OFF);
                 Some(Err(Next))
+            }
+            _ if w.starts_with(b"speed") => {
+                self.speed(&w[5..]);
+                None
             }
             _ => match find_mode(&w) {
                 Some(m) => {
@@ -755,7 +802,7 @@ fn list_modes(current: u8, hold: bool) {
     for m in 0..MODES {
         say!("{} {:2}  {}\r\n", if m == current { '>' } else { ' ' }, m, mode_name(m));
     }
-    out("also: @auto (cycle through them all), @next, @off, @list\r\n");
+    out("also: @auto (cycle through them all), @next, @off, @list, @speed, @speed <MHz>\r\n");
     say!("now: {} ({})\r\n", mode_name(current), if hold { "repeating" } else { "auto" });
 }
 
