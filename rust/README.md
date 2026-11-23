@@ -37,6 +37,8 @@ bit for bit, and that the table matches the original CubeLib algorithm.
 ## Settings (top of `src/main.rs`)
 - `MAX_SCK_HZ` — 595 clock (20 MHz, as in the original SPI code).
 - `HOLD` — extra PIO cycles per slot. Raise it if you see ghosting between layers (tested: `HOLD = 10` → 78 cycles).
+- `BLANKS` (`src/cube.rs`) — all-off words before each layer (anti-ghosting, default 2). Each layer's 10
+  brightness slots are shown back to back, so the layers switch only 5 times per pass.
 
 ## `unlimited` feature: ignore the 595 clock
 `cargo build --release --features unlimited`, or `bundle.ps1 -Unlimited` → `../dist-unlimited/cube-rs.uf2`.
@@ -49,12 +51,13 @@ down while it runs (60, 40, 30 MHz ...). The pin-capture self-test only works at
 faster than that it reports SKIPPED.
 
 **Overclocking the PIO (unlimited build only):** `>` / `<` over USB serial step CPU = PIO clock through
-240 / 264 / 288 / 300 / 320 / 360 / 400 MHz (`src/overclock.rs`). The core voltage goes up to 1.30 V at most;
+240 / 264 / 288 / 300 / 320 / 330 / 336 / 342 / 348 / 360 / 400 MHz (`src/overclock.rs`). The core voltage goes up to 1.30 V at most;
 the regulator's voltage limit is never disabled. The flash clock stays at or below 80 MHz. After each step the
 firmware runs a PIO/DMA pin self-test, compares 2,000 table builds against the reference, and measures the
 refresh rate. A watchdog reboots at 240 MHz if a step hangs the chip, and `m` then reports the clock that failed.
-**Tested on the board so far: 240 and 264 MHz** (264 MHz: all checks passed, 79,999 full brightness cycles/s).
-Higher steps are untested. The firmware boots at 240 MHz (`BOOT_STEP = 0` in `src/main.rs`).
+**Tested on the board: 240–400 MHz**, all Pico-side checks pass. The 595s show a clean picture up to an 84 MHz
+shift clock, so the firmware boots at 336 MHz with the PIO at CPU/2 (`BOOT_STEP = 6`, `MAX_SCK_HZ` in
+`src/main.rs`). See `../PERFORMANCE.md` for the full speed test.
 
 ## Windows build notes
 - The host build tools need `dlltool` from Rust's GNU toolchain `self-contained` folder on PATH; `bundle.ps1` adds it.

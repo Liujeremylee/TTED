@@ -26,8 +26,19 @@ pub const N: usize = 5;
 pub const LEDS: usize = N * N * N;
 /// Brightness steps: 0 = off ... LEVELS = full. Values above LEVELS are also full.
 pub const LEVELS: usize = 10;
-/// Words in one refresh table.
+/// Brightness slots in one refresh pass (10 per layer).
+#[allow(dead_code)]
 pub const SLOTS: usize = LEVELS * N;
+/// All-off words shown before each layer, while the previous layer's driver turns off (anti-ghosting).
+/// Each one lasts one word time (1.65 us at a 20 MHz 595 clock). 0 = no blanking.
+pub const BLANKS: usize = 2;
+/// Words in one refresh table: per layer, BLANKS blank words then its LEVELS brightness slots.
+pub const WORDS: usize = (LEVELS + BLANKS) * N;
+/// Table position of brightness slot `s` of layer `z`. A layer's slots are shown back to back, so the
+/// layer only switches N times per pass (not on every word) and always after the blank words.
+pub const fn idx(s: usize, z: usize) -> usize {
+    z * (LEVELS + BLANKS) + BLANKS + s
+}
 
 /// Column bit for each (y*5 + x) - the TTED two-sided board, Oct. 2026 (same as CubeLibDemo.py).
 pub const XY_MAP: [u8; N * N] = [27, 25, 24, 19, 16, 28, 30, 20, 22, 23, 29, 31, 21, 17, 4, 13, 26, 3, 1, 0, 15, 14, 5, 6, 7];
@@ -69,6 +80,26 @@ const fn layer_bits() -> [u32; N] {
 }
 const MASKS: [u32; N * N] = masks();
 const LBITS: [u32; N] = layer_bits();
+/// Blank word: every column OFF (bit HIGH), no layer ON.
+pub const BLANK: u32 = {
+    let mut b = 0u32;
+    let mut i = 0;
+    while i < N * N {
+        b |= MASKS[i];
+        i += 1;
+    }
+    b
+};
+
+/// Write the blank words of every layer.
+#[inline(always)]
+fn blanks(out: &mut [u32; WORDS]) {
+    for z in 0..N {
+        for k in 0..BLANKS {
+            out[z * (LEVELS + BLANKS) + k] = BLANK;
+        }
+    }
+}
 
 // Every bit position must be used once at most and fit in 32 bits (checked at compile time).
 const _: () = {
@@ -95,7 +126,7 @@ const _: () = {
 ///   * `tmp` is a long-lived scratch buffer: tmp[0..LEVELS] must be zero on entry, and each entry is
 ///     re-zeroed as it is consumed, so it is zero again on exit. No clearing loop, no memset call.
 #[inline(always)]
-fn build_body(data: &[u8; LEDS], out: &mut [u32; SLOTS], tmp: &mut Scratch) {
+fn build_body(data: &[u8; LEDS], out: &mut [u32; WORDS], tmp: &mut Scratch) {
     macro_rules! bucket {
         ($tmp:ident, $layer:ident; $($i:literal)*) => { $( $tmp[$layer[$i] as usize] |= MASKS[$i]; )* };
     }
@@ -108,9 +139,10 @@ fn build_body(data: &[u8; LEDS], out: &mut [u32; SLOTS], tmp: &mut Scratch) {
         for s in 0..LEVELS {
             acc |= tmp[s];
             tmp[s] = 0;
-            out[s * N + z] = acc | lb;
+            out[idx(s, z)] = acc | lb;
         }
     }
+    blanks(out);
 }
 const _: () = assert!(N * N == 25, "the unrolled bucket! list above is written for 25 LEDs per layer");
 
@@ -124,20 +156,20 @@ impl Scratch {
 
 /// The table builder used by `show()` (runs from flash, through the XIP cache).
 #[inline(never)]
-pub fn build(data: &[u8; LEDS], out: &mut [u32; SLOTS], tmp: &mut Scratch) {
+pub fn build(data: &[u8; LEDS], out: &mut [u32; WORDS], tmp: &mut Scratch) {
     build_body(data, out, tmp)
 }
 
 /// The same code placed in SRAM (copied there at boot), to measure whether flash fetches cost anything.
 #[inline(never)]
 #[link_section = ".data.ram_func"]
-pub fn build_ram(data: &[u8; LEDS], out: &mut [u32; SLOTS], tmp: &mut Scratch) {
+pub fn build_ram(data: &[u8; LEDS], out: &mut [u32; WORDS], tmp: &mut Scratch) {
     build_body(data, out, tmp)
 }
 
 /// First version (kept for the before/after measurement only).
 #[inline(never)]
-pub fn build_v1(data: &[u8; LEDS], out: &mut [u32; SLOTS]) {
+pub fn build_v1(data: &[u8; LEDS], out: &mut [u32; WORDS]) {
     for z in 0..N {
         let mut tmp = [0u32; LEVELS + 1]; // tmp[LEVELS] collects "always on" LEDs and is never used
         let layer = &data[z * N * N..(z + 1) * N * N];
@@ -148,9 +180,10 @@ pub fn build_v1(data: &[u8; LEDS], out: &mut [u32; SLOTS]) {
         let mut acc = 0u32;
         for s in 0..LEVELS {
             acc |= tmp[s];
-            out[s * N + z] = acc | LBITS[z];
+            out[idx(s, z)] = acc | LBITS[z];
         }
     }
+    blanks(out);
 }
 
 /// The original CubeLib.display_layer() algorithm, used only to check `build`.
@@ -168,7 +201,7 @@ pub fn reference_word(data: &[u8; LEDS], slot: usize, z: usize) -> u32 {
 /// touch (the DMA's READ_ADDR is one past the end when a pass finishes).
 const NTABLES: usize = 3;
 #[repr(C, align(4))]
-struct Tables([[u32; SLOTS + 1]; NTABLES]);
+struct Tables([[u32; WORDS + 1]; NTABLES]);
 
 type TxSm = StateMachine<(pac::PIO0, SM0), Running>;
 type CapSm = (pac::PIO1, SM0);
@@ -196,7 +229,7 @@ impl Cube {
     pub const fn new() -> Self {
         Cube {
             data: [0; LEDS],
-            tables: Tables([[0; SLOTS + 1]; NTABLES]),
+            tables: Tables([[0; WORDS + 1]; NTABLES]),
             tmp: Scratch::new(),
             next_addr: 0,
             latest: 0,
@@ -240,7 +273,7 @@ impl Cube {
     }
     /// The most recently built table (for the self-test).
     pub fn latest_table(&self) -> &[u32] {
-        &self.tables.0[self.latest][..SLOTS]
+        &self.tables.0[self.latest][..WORDS]
     }
 
     fn table_of(&self, addr: u32) -> Option<usize> {
@@ -259,7 +292,7 @@ impl Cube {
             let ra = dma.ch(DATA_CH).ch_read_addr().read().bits();
             for i in 0..NTABLES {
                 let lo = self.table_addr(i);
-                if ra >= lo && ra < lo + (SLOTS as u32) * 4 {
+                if ra >= lo && ra < lo + (WORDS as u32) * 4 {
                     return i;
                 }
             }
@@ -275,7 +308,7 @@ impl Cube {
         let queued = self.table_of(unsafe { read_volatile(addr_of!(self.next_addr)) }).unwrap_or(cur);
         let target = (0..NTABLES).find(|&i| i != cur && i != queued).unwrap();
         {
-            let t: &mut [u32; SLOTS] = (&mut self.tables.0[target][..SLOTS]).try_into().unwrap();
+            let t: &mut [u32; WORDS] = (&mut self.tables.0[target][..WORDS]).try_into().unwrap();
             build_ram(&self.data, t, &mut self.tmp);
         }
         // The table must be in memory before the DMA (another bus master) can see its address.
@@ -299,7 +332,7 @@ impl Cube {
         self.pio_div = div;
 
         // Show the current picture from the very first pass.
-        let t: &mut [u32; SLOTS] = (&mut self.tables.0[0][..SLOTS]).try_into().unwrap();
+        let t: &mut [u32; WORDS] = (&mut self.tables.0[0][..WORDS]).try_into().unwrap();
         build(&self.data, t, &mut self.tmp);
         self.latest = 0;
         self.next_addr = self.table_addr(0);
@@ -396,7 +429,7 @@ impl Cube {
         // Channel 0: table -> PIO TX FIFO, paced by the PIO, chains to channel 1.
         d.ch_read_addr().write(|w| unsafe { w.bits(self.next_addr) });
         d.ch_write_addr().write(|w| unsafe { w.bits(txf) });
-        d.ch_trans_count().write(|w| unsafe { w.bits(SLOTS as u32) });
+        d.ch_trans_count().write(|w| unsafe { w.bits(WORDS as u32) });
         d.ch_al1_ctrl().write(|w| unsafe { w.bits(ctrl_word(CTRL_CH, dreq, true, true)) });
 
         // Read the configuration back through the named fields: catches any bit-position mistake.

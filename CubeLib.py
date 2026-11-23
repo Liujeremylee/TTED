@@ -39,6 +39,10 @@
 #		leds.fill(6)				#sets all LEDs in the cube to the brightness level in the brackets
 #		You can also write straight into leds.data (125 bytes, index = z*25 + y*5 + x) - the hardware refresh picks it up.
 
+# pyright: reportUndefinedVariable=false
+#		^ for VS Code only: the PIO / Thumb assembly (pull, mov, r7, ldr, label...) and viper (ptr8) names only exist
+#		  inside MicroPython's @rp2.asm_pio, @micropython.asm_thumb and @micropython.viper functions. Ignored on the Pico.
+
 from array import array
 from machine import Pin, SPI, Timer
 import machine

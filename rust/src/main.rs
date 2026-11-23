@@ -1,7 +1,9 @@
 //! TTED 5x5x5 LED cube firmware for the Raspberry Pi Pico 2 (RP2350), in Rust.
 //!
 //! The LEDs are refreshed by hardware (PIO0 + a looping DMA chain): the CPU executes zero instructions per
-//! layer. See cube.rs. Animations: the CubeLibDemo.py sequences and the Quadrum player (TTED.txt).
+//! layer. See cube.rs. Animations: the eight light shows in lightshow.rs, the seven in animations.rs (rain, ripple,
+//! spinner, fireworks, sphere pulse, corkscrew, snake; all of these play one after another), the CubeLibDemo.py
+//! sequences and the Quadrum player (TTED.txt).
 //!
 //! Button 1 (GP13) or 'n' over USB serial: next animation.
 //! USB serial commands: m = measure & report, t = output self-test, b = reboot to BOOTSEL (for flashing), h = help.
@@ -9,7 +11,9 @@
 #![no_std]
 #![no_main]
 
+mod animations;
 mod cube;
+mod lightshow;
 mod quadrum;
 #[cfg(feature = "unlimited")]
 mod overclock;
@@ -31,7 +35,7 @@ use hal::Clock;
 use usb_device::{class_prelude::UsbBusAllocator, prelude::*};
 use usbd_serial::SerialPort;
 
-use cube::{Cube, LEDS, N, SLOTS};
+use cube::{Cube, LEDS, N, WORDS};
 
 #[link_section = ".start_block"]
 #[used]
@@ -53,17 +57,19 @@ const PLL_SYS_240MHZ: hal::pll::PLLConfig =
 /// The 595 shift clock the original SPI code used. Raise it to go faster if your 595s and wiring allow.
 #[cfg(not(feature = "unlimited"))]
 const MAX_SCK_HZ: u32 = 20_000_000;
-/// `--features unlimited`: ignore the 595's rating. CPU/2 = 120 MHz means PIO clock divider 1, the fastest
-/// the PIO can run: one word every 66 PIO cycles = 275 ns. A 74HC595 at 3.3 V is rated for roughly 20 MHz,
-/// so expect wrong LEDs on the cube; the Pico side is still exact.
+/// `--features unlimited`: ignore the 595's rating. 60 MHz = PIO divider 2 at 240 MHz; with BOOT_STEP 6
+/// (336 MHz) that becomes 84 MHz, the fastest this cube's 595s show a clean picture (tested Nov. 2026, with the
+/// stacked 595s: 84 MHz clean, 85.5 MHz past the edge, 90 MHz faint flicker, 100 MHz and up dark or one LED).
+/// '+' still goes to divider 1 (CPU/2) if you want to try.
 // Jason, your retirement time has came closer.
 #[cfg(feature = "unlimited")]
-const MAX_SCK_HZ: u32 = 120_000_000;
+const MAX_SCK_HZ: u32 = 60_000_000;
 /// PIO1 can sample the pins (self-test, timing) only up to this PIO divider; faster clocks skip that check.
 const CAPTURE_MIN_DIV: u16 = 4;
-/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz.
+/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz, 6 = 336 MHz
+/// (595 clock 84 MHz with the divider above). If it ever hangs, the watchdog restarts at 240 MHz (60 MHz).
 #[cfg(feature = "unlimited")]
-const BOOT_STEP: usize = 0;
+const BOOT_STEP: usize = 6;
 /// Extra PIO cycles per slot. 0 = fastest. Raise it if you see ghosting between layers.
 const HOLD: u32 = 0;
 /// Limits for the '+'/'-' 595 clock commands: CPU/3/2 = 40 MHz ... CPU/24/2 = 5 MHz.
@@ -159,7 +165,7 @@ impl<B: InputPin> Ctx<'_, B> {
                     let pio_hz = self.cube.sys_hz / new as u32;
                     let cyc = cube::pio_cycles(self.cube.hold);
                     say!("595 clock {:.2} MHz (CPU/{}) -> {} full PWM cycles/s{}\r\n",
-                        pio_hz as f32 / 2e6, new, pio_hz / (cyc * SLOTS as u32),
+                        pio_hz as f32 / 2e6, new, pio_hz / (cyc * WORDS as u32),
                         if new < 6 { "  [above the 20 MHz the board was designed for: check the cube carefully]" } else { "" });
                 }
                 #[cfg(feature = "unlimited")]
@@ -205,25 +211,34 @@ impl<B: InputPin> Ctx<'_, B> {
         self.cube.show();
         self.cube.wait_shown(); // the capture below must see this table
         let data = self.cube.data;
-        let table: [u32; SLOTS] = self.cube.latest_table().try_into().unwrap();
+        let table: [u32; WORDS] = self.cube.latest_table().try_into().unwrap();
 
         let mut bad_words = 0;
         for s in 0..cube::LEVELS {
             for z in 0..N {
-                if table[s * N + z] != cube::reference_word(&data, s, z) {
+                if table[cube::idx(s, z)] != cube::reference_word(&data, s, z) {
                     bad_words += 1;
                 }
             }
         }
 
-        let mut cap = [0u32; 3 * SLOTS];
-        let mut st = [0u32; 3 * SLOTS];
+        // the blank words must be all-off
+        for z in 0..N {
+            for k in 0..cube::BLANKS {
+                if table[cube::idx(0, z) - cube::BLANKS + k] != cube::BLANK {
+                    bad_words += 1;
+                }
+            }
+        }
+
+        let mut cap = [0u32; 3 * WORDS];
+        let mut st = [0u32; 3 * WORDS];
         let can_capture = self.cube.pio_div >= CAPTURE_MIN_DIV;
         let got = if can_capture { self.cube.capture(&mut cap, &mut st) } else { 0 };
         let mut offset = None;
         if got == cap.len() {
-            for k in 0..SLOTS {
-                if (0..got).all(|i| cap[i] == table[(k + i) % SLOTS]) {
+            for k in 0..WORDS {
+                if (0..got).all(|i| cap[i] == table[(k + i) % WORDS]) {
                     offset = Some(k);
                     break;
                 }
@@ -234,7 +249,7 @@ impl<B: InputPin> Ctx<'_, B> {
 
         let ok = bad_words == 0 && (offset.is_some() || !can_capture);
         if verbose {
-            say!("self-test: table vs original algorithm: {} of {} words differ\r\n", bad_words, SLOTS);
+            say!("self-test: table vs original algorithm: {} of {} words differ\r\n", bad_words, WORDS);
             match offset {
                 Some(_) => say!("self-test: {} words captured on GP1-3 = table, bit for bit: PASS\r\n", got),
                 None if !can_capture => say!(
@@ -280,8 +295,8 @@ impl<B: InputPin> Ctx<'_, B> {
         self.wd.feed();
         // CPU: 2000 random tables, fast builder vs reference.
         let mut data = [0u8; LEDS];
-        let mut a = [0u32; SLOTS];
-        let mut b = [0u32; SLOTS];
+        let mut a = [0u32; WORDS];
+        let mut b = [0u32; WORDS];
         let mut tmp = cube::Scratch::new();
         let mut wrong = 0;
         for _ in 0..2000 {
@@ -320,8 +335,10 @@ impl<B: InputPin> Ctx<'_, B> {
         say!("PIO program: {} instructions, {} PIO cycles per slot (32 bits x 2 + 2 latch; next word pulled during the latch)\r\n",
             if self.cube.hold == 0 { 4 } else { 6 }, cyc);
         say!("CPU work per slot / layer / refresh: 0 instructions (DMA feeds the PIO)\r\n");
-        say!("expected: slot {} ns | each layer refreshed {}/s | {} full PWM cycles/s\r\n",
-            cyc as u64 * 1_000_000_000 / pio_hz as u64, pio_hz / (cyc * N as u32), pio_hz / (cyc * SLOTS as u32));
+        say!("table: {} words per pass = per layer {} blank + {} brightness slots, layer by layer\r\n",
+            WORDS, cube::BLANKS, cube::LEVELS);
+        say!("expected: slot {} ns | layer switches {}/s | {} full PWM cycles/s\r\n",
+            cyc as u64 * 1_000_000_000 / pio_hz as u64, pio_hz / (cyc * WORDS as u32) * N as u32, pio_hz / (cyc * WORDS as u32));
 
         // Measured: complete table passes per second, counted by DMA channel 1's interrupt.
         cube::PASSES.store(0, Ordering::Relaxed);
@@ -335,13 +352,13 @@ impl<B: InputPin> Ctx<'_, B> {
         cube::passes_irq_enable(false);
         let us = self.now_us() - t0;
         let passes = cube::PASSES.load(Ordering::Relaxed) as u64 * 1_000_000 / us;
-        // Each pass shows every layer once per brightness slot (LEVELS times).
-        say!("measured: {} full PWM cycles/s = {} slots/s, each layer refreshed {}/s\r\n",
-            passes, passes * SLOTS as u64, passes * cube::LEVELS as u64);
+        // Each pass shows every layer once (its blank words, then its LEVELS slots back to back).
+        say!("measured: {} full PWM cycles/s = {} words/s, layer switches {}/s\r\n",
+            passes, passes * WORDS as u64, passes * N as u64);
 
         // Measured: time between words on the pins (PIO1 capture, CPU cycle counter).
-        let mut cap = [0u32; 3 * SLOTS];
-        let mut st = [0u32; 3 * SLOTS];
+        let mut cap = [0u32; 3 * WORDS];
+        let mut st = [0u32; 3 * WORDS];
         let got = if self.cube.pio_div >= CAPTURE_MIN_DIV { self.cube.capture(&mut cap, &mut st) } else { usize::MAX };
         if got == usize::MAX {
             say!("measured on the pins: skipped (too fast for PIO1 to sample; the DMA pass count above is the measurement)\r\n");
@@ -356,26 +373,26 @@ impl<B: InputPin> Ctx<'_, B> {
 
         // Table build cost (the only CPU work, once per animation frame).
         let mut data = [0u8; LEDS];
-        let mut table_out = [0u32; SLOTS];
+        let mut table_out = [0u32; WORDS];
         let mut tmp = cube::Scratch::new();
         let overhead = {
             let a = DWT::cycle_count();
             let b = DWT::cycle_count();
             b.wrapping_sub(a)
         };
-        type Builder = fn(&[u8; LEDS], &mut [u32; SLOTS], &mut cube::Scratch);
-        fn v1(d: &[u8; LEDS], o: &mut [u32; SLOTS], _t: &mut cube::Scratch) {
+        type Builder = fn(&[u8; LEDS], &mut [u32; WORDS], &mut cube::Scratch);
+        fn v1(d: &[u8; LEDS], o: &mut [u32; WORDS], _t: &mut cube::Scratch) {
             cube::build_v1(d, o)
         }
         #[inline(never)]
-        fn empty(_d: &[u8; LEDS], _o: &mut [u32; SLOTS], _t: &mut cube::Scratch) {}
+        fn empty(_d: &[u8; LEDS], _o: &mut [u32; WORDS], _t: &mut cube::Scratch) {}
         let builders: [(&str, Builder); 4] = [
             ("empty fn (harness cost)", empty),
             ("v1 (first Rust)", v1),
             ("v2 from flash  ", cube::build),
             ("v2 from SRAM   ", cube::build_ram),
         ];
-        let mut check = [0u32; SLOTS];
+        let mut check = [0u32; WORDS];
         for (name, f) in builders {
             let (mut min, mut max, mut sum, mut wrong) = (u32::MAX, 0u32, 0u64, 0u32);
             const RUNS: u32 = 1000;
@@ -584,17 +601,44 @@ fn main() -> ! {
         }
     }
 
+    // Modes: the light shows (lightshow.rs), then the animations.rs ones, then the CubeLib demo, then the
+    // Quadrum player (TTED.txt).
     loop {
         let r = match ctx.mode {
-            0 => demo(&mut ctx),
+            m if m < lightshow::COUNT => lightshow::play(&mut ctx, m),
+            m if m < SHOWS => animations::play(&mut ctx, m - lightshow::COUNT),
+            DEMO => demo(&mut ctx),
             _ => quadrum_play(&mut ctx),
         };
-        if r.is_err() {
-            ctx.mode = (ctx.mode + 1) % 2;
+        let next = match r {
+            // button 1 or 'n': go to the next mode
+            Err(Next) => Some((ctx.mode + 1) % MODES),
+            // the light shows and animations play one after another, round and round, until the button is pressed
+            Ok(()) if ctx.mode < SHOWS => Some((ctx.mode + 1) % SHOWS),
+            // the demo and the Quadrum player repeat
+            Ok(()) => None,
+        };
+        if let Some(m) = next {
+            ctx.mode = m;
             ctx.cube.clear();
             ctx.cube.show();
-            say!("animation: {}\r\n", if ctx.mode == 0 { "CubeLib demo" } else { "Quadrum TTED.txt" });
+            say!("animation: {}\r\n", mode_name(m));
         }
+    }
+}
+
+/// Light shows + animations (they play in a loop), then the demo and the Quadrum player.
+const SHOWS: u8 = lightshow::COUNT + animations::COUNT;
+const DEMO: u8 = SHOWS;
+/// Number of modes the button cycles through.
+const MODES: u8 = SHOWS + 2;
+
+fn mode_name(mode: u8) -> &'static str {
+    match mode {
+        m if m < lightshow::COUNT => lightshow::NAMES[m as usize],
+        m if m < SHOWS => animations::NAMES[(m - lightshow::COUNT) as usize],
+        DEMO => "CubeLib demo",
+        _ => "Quadrum TTED.txt",
     }
 }
 
@@ -786,6 +830,10 @@ fn USBCTRL_IRQ() {
                             b'b' | b'B' => {
                                 // A running watchdog would reset the chip in the middle of flashing.
                                 unsafe { (*pac::WATCHDOG::ptr()).ctrl().modify(|_, w| w.enable().clear_bit()) };
+                                // Deliberate reboot: forget the overclock marker, or the next boot (after picotool's
+                                // watchdog reset) would think the chip hung and refuse to overclock.
+                                #[cfg(feature = "unlimited")]
+                                overclock::forget();
                                 hal::reboot::reboot(
                                 hal::reboot::RebootKind::BootSel { picoboot_disabled: false, msd_disabled: false },
                                 hal::reboot::RebootArch::Normal,

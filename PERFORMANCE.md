@@ -45,11 +45,22 @@ All numbers measured on the TTED 5×5×5 cube's Raspberry Pi Pico 2 (RP2350), No
 
 ## `unlimited` build (`dist-unlimited/`, 595 rating ignored)
 
-| CPU = PIO clock | 595 clock | Full brightness cycles/s | Status |
+Measured Nov. 23, 2026. The Pico-side checks (pin self-test at CPU/4, 2,000 table builds checked against the
+reference) passed at every CPU clock from 240 to 400 MHz. What the 595s make of it, judged by eye on the cube
+(with the stacked 595s; the result was the same before stacking):
+
+| CPU | 595 clock | Full brightness cycles/s | On the cube |
 |---|---|---|---|
-| 240 MHz | 120 MHz | 72,726 | Pico side verified; 595s not rated this fast |
-| 264 MHz | 132 MHz | 79,999 | Pico side verified (pin self-test, 2,000 checked builds) |
-| 288–400 MHz | 144–200 MHz | — | not tested |
+| 400 MHz (÷1) | 200 MHz | 101,006 | one LED lit |
+| 400 MHz (÷2) | 100 MHz | 50,505 | dark |
+| 360 MHz (÷2) | 90 MHz | 45,455 | faint flicker |
+| 342 MHz (÷2) | 85.5 MHz | 43,183 | past the edge |
+| **336 MHz (÷2)** | **84 MHz** | **42,423** | **clean — the boot default** |
+| 320 MHz (÷2) | 80 MHz | 40,403 | clean |
+| 320 MHz (÷8) | 20 MHz | 10,101 | clean |
+
+Numbers are with the anti-ghosting table (each layer's 10 slots back to back, 2 blank words before each layer:
+60 words per pass). Before it, every word switched layers and off LEDs glowed (low contrast) even at 20 MHz.
 
 The limit at 20 MHz is the 595 shift clock. See the alternatives to the 595 (parallel data lines, 74AHC/74LVC595,
 drivers with built-in PWM) for ways past it.
