@@ -11,6 +11,7 @@ Close any other program that has the cube's port open (VS Code serial monitor, M
 """
 
 import argparse
+import os
 import re
 import sys
 import threading
@@ -49,7 +50,8 @@ Type a preset name (or part of one, or its number) and press Enter:  plasma, fir
 def find_port():
     ports = list(serial.tools.list_ports.comports())
     for p in ports:
-        if p.vid == PICO_VID and p.serial_number == CUBE_SERIAL:
+        # the Rust cube firmware: PID 000A (Windows often reports no serial number)
+        if p.vid == PICO_VID and (p.serial_number == CUBE_SERIAL or p.pid == 0x000A):
             return p.device
     for p in ports:
         if p.vid == PICO_VID:
@@ -74,9 +76,10 @@ class Cube:
             try:
                 data = self.ser.read(256)
             except serial.SerialException:
+                # unplugged: end the program, which also closes the window cube_autostart opened
                 print("\n[cube disconnected]")
                 self.running = False
-                return
+                os._exit(0)
             if not data:
                 continue
             self._buf += data.decode("utf-8", "replace")
