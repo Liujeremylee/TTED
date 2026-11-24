@@ -26,8 +26,10 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | *a preset name*, e.g. `fire` | `@fire` | Play that preset; it repeats until `auto`. Part of a name works (`lava`, `helix`, `bounce`), and so does its number from `list` |
 | `list` | `@list` | Every preset, grouped by kind (ambient, waves, spirals, particles, weather, classics) with a one-line description; `>` marks the one playing, and the current speed is shown on top |
 | `auto` | `@auto` | Play all presets one after another (the start-up behaviour) |
-| `next` | `@next` or `n` | Skip to the next preset (button 1 on GP13 does the same) |
-| `off` | `@off` | All LEDs dark (`auto` or any preset name turns them back on) |
+| `next` | `@next` or `n` | Skip to the next preset (button 1 does the same) |
+| `prev` | `@prev` | Back to the previous preset (button 2) |
+| `off` / `on` | `@off` / `@on` | All LEDs dark / back on to the preset that was playing (button 3 toggles) |
+| `dim` / `bright` | `@dim` / `@bright` | Low brightness (about a third) / full brightness (button 4 toggles). `brightness` shows which |
 | `measure` | `m` | Refresh report: clocks, measured refresh rate, table build times, self-test result |
 | `test` | `t` | Self-test: table vs the original CubeLib algorithm, and the words on the pins (595 clock ≤ CPU/4) |
 | `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s, tempo. All speed commands change the cube live |
@@ -35,12 +37,21 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `jason` | `@jason` | Jason's setting: the original design speed, 595 clock 20 MHz with the CPU at 240 MHz |
 | `faster` / `slower` | `+` / `-` | 595 clock one step up / down (CPU ÷ 1, 2, 3 ...) |
 | `tempo 150` | `@tempo 150` | How fast the animations play, in percent: 200 = twice as fast, 50 = half speed (25–400). `tempo` alone shows it |
-| `reset` | `@reset` | Back to defaults: power-up speed (84 MHz), tempo 100 %, presets cycling (`auto`) |
+| `reset` | `@reset` | Back to defaults: power-up speed (84 MHz), tempo 100 %, full brightness, presets cycling (`auto`) |
 | `overclock` / `underclock` | `>` / `<` | CPU = PIO clock one step up / down, 240–400 MHz (`unlimited` build only) |
 | `info` | `h` | Firmware help text |
 | `help` | — | This list, in the terminal |
 | `quit` | — | Close the terminal (the cube keeps playing) |
 | — | `b` | Reboot into BOOTSEL (flash mode). Not available at the `cube>` prompt on purpose |
+
+### Buttons on the cube
+
+| Button | Pin | What it does |
+|---|---|---|
+| 1 | GP13 | Next preset (from off: switch back on) |
+| 2 | GP10 | Previous preset |
+| 3 | GP11 | On / off (comes back on with the preset that was playing) |
+| 4 | GP12 | Brightness high / low |
 
 One-shot from a script: `python tools\cube_control.py fire` (or `auto`, `off`, `measure` ...) sends one command
 and exits.

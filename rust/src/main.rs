@@ -5,7 +5,8 @@
 //! spinner, fireworks, sphere pulse, corkscrew, snake; all of these play one after another), the CubeLibDemo.py
 //! sequences and the Quadrum player (TTED.txt).
 //!
-//! Button 1 (GP13) or 'n' over USB serial: next animation.
+//! Buttons: 1 (GP13) next preset, 2 (GP10) previous, 3 (GP11) on/off, 4 (GP12) brightness high/low.
+//! 'n' over USB serial: next animation.
 //! USB serial commands: m = measure & report, t = output self-test, b = reboot to BOOTSEL (for flashing), h = help.
 
 #![no_std]
@@ -169,8 +170,13 @@ struct Ctx<'a, B: InputPin> {
     anim: &'a quadrum::Animation,
     anim_err: Option<&'static str>,
     timer: hal::Timer<hal::timer::CopyableTimer0>,
-    button: B,
-    btn_down: bool,
+    /// Buttons 1-4 (GP13, GP10, GP11, GP12): next preset, previous preset, on/off, brightness high/low.
+    buttons: [B; 4],
+    btn_down: [bool; 4],
+    /// When each button last changed state (us), for debouncing.
+    btn_at: [u64; 4],
+    /// The preset to come back to when the cube is switched on again after '@off' / button 3.
+    resume: u8,
     mode: u8,
     rng: u32,
     boot_test: Option<bool>,
@@ -282,7 +288,8 @@ impl<B: InputPin> Ctx<'_, B> {
         self.speed_default();
         self.tempo = 100;
         self.hold = false;
-        say!("reset: power-up speed, tempo 100%, presets cycling (auto)\r\n");
+        self.cube.low = false;
+        say!("reset: power-up speed, tempo 100%, full brightness, presets cycling (auto)\r\n");
         self.speed(b"");
     }
 
@@ -305,9 +312,21 @@ impl<B: InputPin> Ctx<'_, B> {
                 None
             }
             b"next" | b"skip" => Some(Err(Next)),
-            b"off" | b"dark" | b"stop" | b"blackout" => {
-                self.jump = Some(OFF);
-                Some(Err(Next))
+            b"prev" | b"previous" | b"back" => Some(self.previous()),
+            b"off" | b"dark" | b"stop" | b"blackout" => Some(self.power(false)),
+            b"on" | b"resume" => Some(self.power(true)),
+            b"power" | b"toggle" => Some(self.power(self.mode == OFF)),
+            b"dim" | b"low" | b"brightnesslow" | b"lowbrightness" => {
+                self.brightness(true);
+                None
+            }
+            b"bright" | b"high" | b"brightnesshigh" | b"highbrightness" | b"full" => {
+                self.brightness(false);
+                None
+            }
+            b"brightness" => {
+                say!("brightness: {} (@bright / @dim, or button 4)\r\n", if self.cube.low { "low" } else { "high" });
+                None
             }
             _ if w.starts_with(b"speed") => {
                 self.speed(&w[5..]);
@@ -364,6 +383,67 @@ impl<B: InputPin> Ctx<'_, B> {
         self.timer.get_counter().ticks()
     }
 
+    /// On (back to the preset that was playing) or off (all dark).
+    fn power(&mut self, on: bool) -> Result<(), Next> {
+        if on {
+            self.jump = Some(if self.mode == OFF || self.mode == PROBE { self.resume } else { self.mode });
+        } else {
+            if self.mode < MODES {
+                self.resume = self.mode;
+            }
+            self.jump = Some(OFF);
+        }
+        Err(Next)
+    }
+
+    /// The previous preset (from off: the one before the preset that was playing).
+    fn previous(&mut self) -> Result<(), Next> {
+        let from = if self.mode < MODES { self.mode } else { self.resume };
+        self.jump = Some((from + MODES - 1) % MODES);
+        Err(Next)
+    }
+
+    /// Low (about a third) or high (full) brightness; the next frame shows it.
+    fn brightness(&mut self, low: bool) {
+        self.cube.low = low;
+        say!("brightness: {}\r\n", if low { "low" } else { "high" });
+        if self.mode == OFF {
+            return;
+        }
+        if self.mode != PROBE {
+            self.cube.show(); // the picture on screen right now, at the new brightness
+        }
+    }
+
+    /// Check the four buttons (debounced, 30 ms). Buttons 1/2/3 switch presets or power, so they end the
+    /// animation; button 4 just changes the brightness.
+    fn check_buttons(&mut self) -> Option<Result<(), Next>> {
+        let now = self.now_us();
+        for i in 0..4 {
+            let pressed = self.buttons[i].is_low().unwrap_or(false);
+            if pressed == self.btn_down[i] || now - self.btn_at[i] < 30_000 {
+                continue;
+            }
+            self.btn_down[i] = pressed;
+            self.btn_at[i] = now;
+            if !pressed {
+                continue;
+            }
+            match i {
+                0 => {
+                    if self.mode == OFF {
+                        return Some(self.power(true)); // from off, button 1 also switches back on
+                    }
+                    return Some(Err(Next));
+                }
+                1 => return Some(self.previous()),
+                2 => return Some(self.power(self.mode == OFF)),
+                _ => self.brightness(!self.cube.low),
+            }
+        }
+        None
+    }
+
     /// Display the current picture, then wait (scaled by the '@tempo' setting).
     fn frame(&mut self, ms: u32) -> Result<(), Next> {
         self.cube.show();
@@ -408,13 +488,8 @@ impl<B: InputPin> Ctx<'_, B> {
                     return r;
                 }
             }
-            let pressed = self.button.is_low().unwrap_or(false);
-            if pressed && !self.btn_down {
-                self.btn_down = true;
-                return Err(Next);
-            }
-            if !pressed {
-                self.btn_down = false;
+            if let Some(r) = self.check_buttons() {
+                return r;
             }
             if self.now_us() - start >= ms as u64 * 1000 {
                 return Ok(());
@@ -436,6 +511,7 @@ impl<B: InputPin> Ctx<'_, B> {
     /// 2) the words actually leaving GP1..3 (captured by PIO1) equal the table, latch after every 32 bits.
     fn selftest(&mut self, verbose: bool) -> bool {
         let saved = self.cube.data;
+        let saved_low = core::mem::replace(&mut self.cube.low, false); // the check compares against full brightness
         for i in 0..LEDS {
             self.cube.data[i] = (self.random() % 13) as u8; // 0..12, including values above full brightness
         }
@@ -476,6 +552,7 @@ impl<B: InputPin> Ctx<'_, B> {
             }
         }
         self.cube.data = saved;
+        self.cube.low = saved_low;
         self.cube.show();
 
         let ok = bad_words == 0 && (offset.is_some() || !can_capture);
@@ -713,6 +790,7 @@ fn help() {
     out("\r\nTTED LED cube (Rust). Commands: m = measure, t = self-test, n = next animation,\r\n");
     out("+ / - = faster / slower 595 clock (default 20 MHz), b = BOOTSEL (flash mode), h = help\r\n");
     out("Presets by name: @plasma, @fire, @lava ... + Enter (@list = all of them, @auto = cycle, @off = dark)\r\n");
+    out("@prev, @on, @bright, @dim. Buttons: 1 next, 2 previous, 3 on/off, 4 brightness high/low\r\n");
 }
 
 #[hal::entry]
@@ -765,10 +843,13 @@ fn main() -> ! {
         _data.set_slew_rate(Fast);
         _data.set_drive_strength(TwelveMilliAmps);
     }
-    let button1 = pins.gpio13.into_pull_up_input();
-    let _button2 = pins.gpio10.into_pull_up_input();
-    let _button3 = pins.gpio11.into_pull_up_input();
-    let _button4 = pins.gpio12.into_pull_up_input();
+    // 1 next preset, 2 previous preset, 3 on/off, 4 brightness high/low
+    let buttons = [
+        pins.gpio13.into_pull_up_input().into_dyn_pin(),
+        pins.gpio10.into_pull_up_input().into_dyn_pin(),
+        pins.gpio11.into_pull_up_input().into_dyn_pin(),
+        pins.gpio12.into_pull_up_input().into_dyn_pin(),
+    ];
 
     // ---- DMA out of reset (channels 0 and 1 are driven directly by cube.rs) ----
     use hal::dma::DMAExt;
@@ -809,8 +890,10 @@ fn main() -> ! {
         anim,
         anim_err,
         timer,
-        button: button1,
-        btn_down: false,
+        buttons,
+        btn_down: [false; 4],
+        btn_at: [0; 4],
+        resume: 0,
         mode: 0,
         rng: 0x1234_5678 ^ (timer.get_counter().ticks() as u32),
         boot_test: None,
@@ -943,7 +1026,7 @@ fn list_modes(current: u8, hold: bool) {
     for m in 0..MODES {
         say!("{} {:2}  {}\r\n", if m == current { '>' } else { ' ' }, m, mode_name(m));
     }
-    out("also: @auto, @next, @off, @list, @speed [MHz|jason|default], @tempo [percent], @jason, @reset\r\n");
+    out("also: @auto, @next, @prev, @off, @on, @bright, @dim, @list, @speed [MHz|jason|default], @tempo [percent], @jason, @reset\r\n");
     say!("now: {} ({})\r\n", mode_name(current), if hold { "repeating" } else { "auto" });
 }
 

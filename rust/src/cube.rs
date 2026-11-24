@@ -225,6 +225,14 @@ pub struct Cube {
     pub sys_hz: u32,
     pub pio_div: u16,
     pub hold: u32,
+    /// Low brightness (button 4 / '@dim'): every LED shown at about a third of its brightness.
+    pub low: bool,
+}
+
+/// Low brightness: 0 stays off, anything lit keeps at least step 1, full (LEVELS) becomes 3.
+fn dimmed(v: u8) -> u8 {
+    let v = (v as usize).min(LEVELS);
+    if v == 0 { 0 } else { ((v * 3 + LEVELS - 1) / LEVELS) as u8 }
 }
 
 impl Cube {
@@ -242,6 +250,7 @@ impl Cube {
             sys_hz: 0,
             pio_div: 0,
             hold: 0,
+            low: false,
         }
     }
 
@@ -311,7 +320,12 @@ impl Cube {
         let target = (0..NTABLES).find(|&i| i != cur && i != queued).unwrap();
         {
             let t: &mut [u32; WORDS] = (&mut self.tables.0[target][..WORDS]).try_into().unwrap();
-            build_ram(&self.data, t, &mut self.tmp);
+            if self.low {
+                let d = self.data.map(dimmed);
+                build_ram(&d, t, &mut self.tmp);
+            } else {
+                build_ram(&self.data, t, &mut self.tmp);
+            }
         }
         // The table must be in memory before the DMA (another bus master) can see its address.
         compiler_fence(Ordering::SeqCst);

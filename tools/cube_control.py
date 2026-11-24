@@ -83,8 +83,11 @@ Presets
   <name>                  play that preset (repeats until 'auto'); part of a name or its number works too
   list                    all presets, grouped, with what they do (> = playing now)
   auto                    play all presets one after another
-  next                    skip to the next preset
-  off                     all LEDs dark
+  next / prev             skip to the next / previous preset
+  off / on                all LEDs dark / back on (to the preset that was playing)
+  bright / dim            full brightness / low brightness (about a third)
+Buttons on the cube
+  1 (GP13) next preset    2 (GP10) previous preset    3 (GP11) on/off    4 (GP12) brightness high/low
 Speed (all change live, no restart)
   speed                   show the current speed (595 clock, CPU clock, refresh rate, tempo)
   speed <MHz>             set the 595 clock, e.g. 'speed 84' (fastest clean on this cube), 'speed 21'
@@ -93,7 +96,7 @@ Speed (all change live, no restart)
   overclock / underclock  CPU clock one step up / down (fast 'unlimited' build only)
   tempo <percent>         how fast the animations play: 'tempo 200' = twice as fast, 'tempo 50' = half
   tempo                   show the tempo
-  reset                   back to defaults: power-up speed (84 MHz), tempo 100%, presets cycling
+  reset                   back to defaults: power-up speed (84 MHz), tempo 100%, full brightness, presets cycling
 Checks
   measure                 full refresh report
   test                    self-test (checks the pins at 595 clocks up to CPU/4)
@@ -217,7 +220,8 @@ def show_list(cube):
             print(f" {mark}{num:3}  {name:<17} {desc}")
             listed.add(num)
     print(f"\n {'-' * (width - 2)}")
-    print(" Type a name or number to play it. 'auto' = cycle all, 'off' = dark, 'help' = all commands.")
+    print(" Type a name or number to play it. 'auto' = cycle all, 'off'/'on', 'dim'/'bright', 'help' = all commands.")
+    print(" Buttons: 1 next, 2 previous, 3 on/off, 4 brightness high/low.")
     print(" Speed: 'speed 84', 'jason' (original 20 MHz), 'tempo 150' (animation pace), 'reset' (defaults).")
     print("=" * width)
     print()
@@ -275,7 +279,7 @@ def main():
     print(f"TTED cube connected on {port}")
     show_list(cube)
     names = [name for _, name, _ in cube.presets()[0]]
-    setup_completion(names + ["list", "auto", "next", "off", "help", "quit", "speed", "tempo", "jason", "reset"]
+    setup_completion(names + ["list", "auto", "next", "prev", "off", "on", "bright", "dim", "help", "quit", "speed", "tempo", "jason", "reset"]
                      + list(LETTER_COMMANDS))
 
     try:
