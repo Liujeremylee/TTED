@@ -55,7 +55,8 @@ reference) passed at every CPU clock from 240 to 400 MHz. What the 595s make of 
 | 400 MHz (÷2) | 100 MHz | 50,505 | dark |
 | 360 MHz (÷2) | 90 MHz | 45,455 | faint flicker |
 | 342 MHz (÷2) | 85.5 MHz | 43,183 | past the edge |
-| **336 MHz (÷2)** | **84 MHz** | **42,423** | **clean — the boot default** |
+| 336 MHz (÷2) | 84 MHz | 42,423 | clean (fastest clean; was the boot default) |
+| **328 MHz (÷2)** | **82 MHz** | **41,414** | **clean — the boot default** |
 | 320 MHz (÷2) | 80 MHz | 40,403 | clean |
 | 320 MHz (÷8) | 20 MHz | 10,101 | clean |
 

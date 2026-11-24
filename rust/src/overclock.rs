@@ -23,14 +23,15 @@ pub struct Step {
 }
 
 /// 12 MHz crystal, REFDIV 1: VCO = 12 MHz x FBDIV (750..1600 MHz), CPU = VCO / post_div1 / post_div2.
-pub const STEPS: [Step; 11] = [
+pub const STEPS: [Step; 12] = [
     Step { mhz: 240, vco_mhz: 1440, post_div1: 6, post_div2: 1, vsel: 11, qmi_div: 3 },
     Step { mhz: 264, vco_mhz: 1584, post_div1: 6, post_div2: 1, vsel: 11, qmi_div: 4 },
     Step { mhz: 288, vco_mhz: 1440, post_div1: 5, post_div2: 1, vsel: 12, qmi_div: 4 },
     Step { mhz: 300, vco_mhz: 1500, post_div1: 5, post_div2: 1, vsel: 12, qmi_div: 4 },
     Step { mhz: 320, vco_mhz: 960, post_div1: 3, post_div2: 1, vsel: 13, qmi_div: 4 },
-    // Fine steps between 320 and 360 (595 clock 82.5 / 84 / 85.5 / 87 MHz at PIO divider 2), to find the
-    // 595s' exact limit. Same 1.25 V as 360 MHz.
+    // Fine steps between 320 and 360 (595 clock 82 / 82.5 / 84 / 85.5 / 87 MHz at PIO divider 2), to find the
+    // 595s' exact limit. Same 1.25 V as 360 MHz. 328 MHz = the power-up default (595 clock 82 MHz).
+    Step { mhz: 328, vco_mhz: 984, post_div1: 3, post_div2: 1, vsel: 14, qmi_div: 5 },
     Step { mhz: 330, vco_mhz: 1320, post_div1: 4, post_div2: 1, vsel: 14, qmi_div: 5 },
     Step { mhz: 336, vco_mhz: 1344, post_div1: 4, post_div2: 1, vsel: 14, qmi_div: 5 },
     Step { mhz: 342, vco_mhz: 1368, post_div1: 4, post_div2: 1, vsel: 14, qmi_div: 5 },

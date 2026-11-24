@@ -58,8 +58,8 @@ const PLL_SYS_240MHZ: hal::pll::PLLConfig =
 /// The 595 shift clock the original SPI code used. Raise it to go faster if your 595s and wiring allow.
 #[cfg(not(feature = "unlimited"))]
 const MAX_SCK_HZ: u32 = 20_000_000;
-/// `--features unlimited`: ignore the 595's rating. 60 MHz = PIO divider 2 at 240 MHz; with BOOT_STEP 6
-/// (336 MHz) that becomes 84 MHz, the fastest this cube's 595s show a clean picture (tested Nov. 2026, with the
+/// `--features unlimited`: ignore the 595's rating. 60 MHz = PIO divider 2 at 240 MHz; with BOOT_STEP 5
+/// (328 MHz) that becomes 82 MHz, the default (84 MHz is the fastest this cube's 595s showed clean; tested Nov. 2026, with the
 /// stacked 595s: 84 MHz clean, 85.5 MHz past the edge, 90 MHz faint flicker, 100 MHz and up dark or one LED).
 /// '+' still goes to divider 1 (CPU/2) if you want to try.
 // Jason, your retirement time has came closer.
@@ -67,10 +67,10 @@ const MAX_SCK_HZ: u32 = 20_000_000;
 const MAX_SCK_HZ: u32 = 60_000_000;
 /// PIO1 can sample the pins (self-test, timing) only up to this PIO divider; faster clocks skip that check.
 const CAPTURE_MIN_DIV: u16 = 4;
-/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz, 6 = 336 MHz
-/// (595 clock 84 MHz with the divider above). If it ever hangs, the watchdog restarts at 240 MHz (60 MHz).
+/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz, 5 = 328 MHz
+/// (595 clock 82 MHz with the divider above). If it ever hangs, the watchdog restarts at 240 MHz (60 MHz).
 #[cfg(feature = "unlimited")]
-const BOOT_STEP: usize = 6;
+const BOOT_STEP: usize = 5;
 /// Extra PIO cycles per slot. 0 = fastest. Raise it if you see ghosting between layers.
 const HOLD: u32 = 0;
 /// Limits for the '+'/'-' 595 clock commands: CPU/3/2 = 40 MHz ... CPU/24/2 = 5 MHz.
@@ -251,7 +251,7 @@ impl<B: InputPin> Ctx<'_, B> {
         }
     }
 
-    /// The power-up speed (unlimited: BOOT_STEP and the boot divider, i.e. 84 MHz).
+    /// The power-up speed (unlimited: BOOT_STEP and the boot divider, i.e. 82 MHz).
     fn speed_default(&mut self) {
         #[cfg(feature = "unlimited")]
         let step = BOOT_STEP;
