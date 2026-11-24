@@ -85,9 +85,13 @@ Presets
   auto                    play all presets one after another
   next / prev             skip to the next / previous preset
   off / on                all LEDs dark / back on (to the preset that was playing)
-  bright / dim            full brightness / low brightness (about a third)
+Brightness (5 steps: 5 = 100%, 4 = 80%, 3 = 60%, 2 = 40%, 1 = 20%)
+  bright / dim            one step brighter / dimmer
+  high / low              straight to 5 (full) / 1 (dimmest)
+  brightness <1-5>        set it, e.g. 'brightness 3'; 'brightness' alone shows it
 Buttons on the cube
-  1 (GP13) next preset    2 (GP10) previous preset    3 (GP11) on/off    4 (GP12) brightness high/low
+  1 (GP13) next preset    2 (GP10) previous preset    3 (GP11) on/off
+  4 (GP12) brightness one step down: 5 -> 4 -> 3 -> 2 -> 1 -> back to 5
 Speed (all change live, no restart)
   speed                   show the current speed (595 clock, CPU clock, refresh rate, tempo)
   speed <MHz>             set the 595 clock, e.g. 'speed 84' (fastest clean on this cube), 'speed 21'
@@ -221,7 +225,7 @@ def show_list(cube):
             listed.add(num)
     print(f"\n {'-' * (width - 2)}")
     print(" Type a name or number to play it. 'auto' = cycle all, 'off'/'on', 'dim'/'bright', 'help' = all commands.")
-    print(" Buttons: 1 next, 2 previous, 3 on/off, 4 brightness high/low.")
+    print(" Brightness 1-5: 'bright', 'dim', 'brightness 3'. Buttons: 1 next, 2 previous, 3 on/off, 4 brightness.")
     print(" Speed: 'speed 84', 'jason' (original 20 MHz), 'tempo 150' (animation pace), 'reset' (defaults).")
     print("=" * width)
     print()
@@ -279,7 +283,7 @@ def main():
     print(f"TTED cube connected on {port}")
     show_list(cube)
     names = [name for _, name, _ in cube.presets()[0]]
-    setup_completion(names + ["list", "auto", "next", "prev", "off", "on", "bright", "dim", "help", "quit", "speed", "tempo", "jason", "reset"]
+    setup_completion(names + ["list", "auto", "next", "prev", "off", "on", "bright", "dim", "high", "low", "brightness", "help", "quit", "speed", "tempo", "jason", "reset"]
                      + list(LETTER_COMMANDS))
 
     try:

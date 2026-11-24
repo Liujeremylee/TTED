@@ -225,14 +225,19 @@ pub struct Cube {
     pub sys_hz: u32,
     pub pio_div: u16,
     pub hold: u32,
-    /// Low brightness (button 4 / '@dim'): every LED shown at about a third of its brightness.
-    pub low: bool,
+    /// Overall brightness 1..=BRIGHT_MAX (button 4 / '@bright' / '@dim'): BRIGHT_MAX = full, 1 = a fifth.
+    pub bright: u8,
 }
 
-/// Low brightness: 0 stays off, anything lit keeps at least step 1, full (LEVELS) becomes 3.
-fn dimmed(v: u8) -> u8 {
+/// Brightness settings: 5 = 100 %, 4 = 80 %, 3 = 60 %, 2 = 40 %, 1 = 20 %.
+pub const BRIGHT_MAX: u8 = 5;
+
+/// Scale one LED to brightness `b` (1..=BRIGHT_MAX): 0 stays off, anything lit keeps at least step 1.
+fn dimmed(v: u8, b: u8) -> u8 {
     let v = (v as usize).min(LEVELS);
-    if v == 0 { 0 } else { ((v * 3 + LEVELS - 1) / LEVELS) as u8 }
+    let b = b as usize;
+    let m = BRIGHT_MAX as usize;
+    if v == 0 { 0 } else { ((v * b + m - 1) / m) as u8 }
 }
 
 impl Cube {
@@ -250,7 +255,7 @@ impl Cube {
             sys_hz: 0,
             pio_div: 0,
             hold: 0,
-            low: false,
+            bright: BRIGHT_MAX,
         }
     }
 
@@ -320,8 +325,9 @@ impl Cube {
         let target = (0..NTABLES).find(|&i| i != cur && i != queued).unwrap();
         {
             let t: &mut [u32; WORDS] = (&mut self.tables.0[target][..WORDS]).try_into().unwrap();
-            if self.low {
-                let d = self.data.map(dimmed);
+            if self.bright < BRIGHT_MAX {
+                let b = self.bright.max(1);
+                let d = self.data.map(|v| dimmed(v, b));
                 build_ram(&d, t, &mut self.tmp);
             } else {
                 build_ram(&self.data, t, &mut self.tmp);

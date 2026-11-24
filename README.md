@@ -29,7 +29,9 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `next` | `@next` or `n` | Skip to the next preset (button 1 does the same) |
 | `prev` | `@prev` | Back to the previous preset (button 2) |
 | `off` / `on` | `@off` / `@on` | All LEDs dark / back on to the preset that was playing (button 3 toggles) |
-| `dim` / `bright` | `@dim` / `@bright` | Low brightness (about a third) / full brightness (button 4 toggles). `brightness` shows which |
+| `bright` / `dim` | `@bright` / `@dim` | Brightness one step up / down. 5 steps: 5 = 100 %, 4 = 80 %, 3 = 60 %, 2 = 40 %, 1 = 20 % |
+| `high` / `low` | `@high` / `@low` | Brightness straight to 5 (full) / 1 (dimmest) |
+| `brightness 3` | `@brightness 3` | Set the brightness 1–5; `brightness` alone shows it |
 | `measure` | `m` | Refresh report: clocks, measured refresh rate, table build times, self-test result |
 | `test` | `t` | Self-test: table vs the original CubeLib algorithm, and the words on the pins (595 clock ≤ CPU/4) |
 | `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s, tempo. All speed commands change the cube live |
@@ -51,7 +53,7 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | 1 | GP13 | Next preset (from off: switch back on) |
 | 2 | GP10 | Previous preset |
 | 3 | GP11 | On / off (comes back on with the preset that was playing) |
-| 4 | GP12 | Brightness high / low |
+| 4 | GP12 | Brightness one step down: 5 → 4 → 3 → 2 → 1 → back to 5 (full) |
 
 One-shot from a script: `python tools\cube_control.py fire` (or `auto`, `off`, `measure` ...) sends one command
 and exits.

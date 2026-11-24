@@ -288,7 +288,7 @@ impl<B: InputPin> Ctx<'_, B> {
         self.speed_default();
         self.tempo = 100;
         self.hold = false;
-        self.cube.low = false;
+        self.cube.bright = cube::BRIGHT_MAX;
         say!("reset: power-up speed, tempo 100%, full brightness, presets cycling (auto)\r\n");
         self.speed(b"");
     }
@@ -316,16 +316,32 @@ impl<B: InputPin> Ctx<'_, B> {
             b"off" | b"dark" | b"stop" | b"blackout" => Some(self.power(false)),
             b"on" | b"resume" => Some(self.power(true)),
             b"power" | b"toggle" => Some(self.power(self.mode == OFF)),
-            b"dim" | b"low" | b"brightnesslow" | b"lowbrightness" => {
-                self.brightness(true);
+            b"dim" | b"darker" | b"down" => {
+                self.brightness(self.cube.bright.saturating_sub(1).max(1));
                 None
             }
-            b"bright" | b"high" | b"brightnesshigh" | b"highbrightness" | b"full" => {
-                self.brightness(false);
+            b"bright" | b"brighter" | b"up" => {
+                self.brightness((self.cube.bright + 1).min(cube::BRIGHT_MAX));
                 None
             }
-            b"brightness" => {
-                say!("brightness: {} (@bright / @dim, or button 4)\r\n", if self.cube.low { "low" } else { "high" });
+            b"low" | b"lowest" | b"min" => {
+                self.brightness(1);
+                None
+            }
+            b"high" | b"full" | b"max" => {
+                self.brightness(cube::BRIGHT_MAX);
+                None
+            }
+            _ if w.starts_with(b"brightness") => {
+                let arg = &w[10..];
+                if arg.is_empty() {
+                    self.brightness(self.cube.bright);
+                } else {
+                    match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u8>().ok()) {
+                        Some(b) if (1..=cube::BRIGHT_MAX).contains(&b) => self.brightness(b),
+                        _ => say!("brightness: 1 to {} (e.g. @brightness 3)\r\n", cube::BRIGHT_MAX),
+                    }
+                }
                 None
             }
             _ if w.starts_with(b"speed") => {
@@ -403,10 +419,10 @@ impl<B: InputPin> Ctx<'_, B> {
         Err(Next)
     }
 
-    /// Low (about a third) or high (full) brightness; the next frame shows it.
-    fn brightness(&mut self, low: bool) {
-        self.cube.low = low;
-        say!("brightness: {}\r\n", if low { "low" } else { "high" });
+    /// Brightness 1..=5 (20 % steps, 5 = full); shown at once.
+    fn brightness(&mut self, b: u8) {
+        self.cube.bright = b;
+        say!("brightness: {} of {} ({}%)\r\n", b, cube::BRIGHT_MAX, b as u32 * 100 / cube::BRIGHT_MAX as u32);
         if self.mode == OFF {
             return;
         }
@@ -438,7 +454,8 @@ impl<B: InputPin> Ctx<'_, B> {
                 }
                 1 => return Some(self.previous()),
                 2 => return Some(self.power(self.mode == OFF)),
-                _ => self.brightness(!self.cube.low),
+                // 5 -> 4 -> 3 -> 2 -> 1 -> back to 5
+                _ => self.brightness(if self.cube.bright <= 1 { cube::BRIGHT_MAX } else { self.cube.bright - 1 }),
             }
         }
         None
@@ -511,7 +528,7 @@ impl<B: InputPin> Ctx<'_, B> {
     /// 2) the words actually leaving GP1..3 (captured by PIO1) equal the table, latch after every 32 bits.
     fn selftest(&mut self, verbose: bool) -> bool {
         let saved = self.cube.data;
-        let saved_low = core::mem::replace(&mut self.cube.low, false); // the check compares against full brightness
+        let saved_bright = core::mem::replace(&mut self.cube.bright, cube::BRIGHT_MAX); // the check compares against full brightness
         for i in 0..LEDS {
             self.cube.data[i] = (self.random() % 13) as u8; // 0..12, including values above full brightness
         }
@@ -552,7 +569,7 @@ impl<B: InputPin> Ctx<'_, B> {
             }
         }
         self.cube.data = saved;
-        self.cube.low = saved_low;
+        self.cube.bright = saved_bright;
         self.cube.show();
 
         let ok = bad_words == 0 && (offset.is_some() || !can_capture);
@@ -790,7 +807,7 @@ fn help() {
     out("\r\nTTED LED cube (Rust). Commands: m = measure, t = self-test, n = next animation,\r\n");
     out("+ / - = faster / slower 595 clock (default 20 MHz), b = BOOTSEL (flash mode), h = help\r\n");
     out("Presets by name: @plasma, @fire, @lava ... + Enter (@list = all of them, @auto = cycle, @off = dark)\r\n");
-    out("@prev, @on, @bright, @dim. Buttons: 1 next, 2 previous, 3 on/off, 4 brightness high/low\r\n");
+    out("@prev, @on, @bright, @dim, @brightness 1-5. Buttons: 1 next, 2 previous, 3 on/off, 4 brightness 5..1\r\n");
 }
 
 #[hal::entry]
