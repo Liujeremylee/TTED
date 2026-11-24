@@ -79,7 +79,9 @@ const fn layer_bits() -> [u32; N] {
     m
 }
 const MASKS: [u32; N * N] = masks();
-const LBITS: [u32; N] = layer_bits();
+pub const LBITS: [u32; N] = layer_bits();
+/// Every layer bit.
+pub const ALL_LAYERS: u32 = LBITS[0] | LBITS[1] | LBITS[2] | LBITS[3] | LBITS[4];
 /// Blank word: every column OFF (bit HIGH), no layer ON.
 pub const BLANK: u32 = {
     let mut b = 0u32;
@@ -312,6 +314,22 @@ impl Cube {
             build_ram(&self.data, t, &mut self.tmp);
         }
         // The table must be in memory before the DMA (another bus master) can see its address.
+        compiler_fence(Ordering::SeqCst);
+        cortex_m::asm::dmb();
+        unsafe { write_volatile(addr_of_mut!(self.next_addr), self.table_addr(target)) };
+        self.latest = target;
+    }
+
+    /// Show raw words instead of a picture (test patterns): word = `f(layer z, is_blank_word)` for every word.
+    pub fn show_words(&mut self, f: impl Fn(usize, bool) -> u32) {
+        let cur = self.current_table();
+        let queued = self.table_of(unsafe { read_volatile(addr_of!(self.next_addr)) }).unwrap_or(cur);
+        let target = (0..NTABLES).find(|&i| i != cur && i != queued).unwrap();
+        for z in 0..N {
+            for k in 0..LEVELS + BLANKS {
+                self.tables.0[target][z * (LEVELS + BLANKS) + k] = f(z, k < BLANKS);
+            }
+        }
         compiler_fence(Ordering::SeqCst);
         cortex_m::asm::dmb();
         unsafe { write_volatile(addr_of_mut!(self.next_addr), self.table_addr(target)) };

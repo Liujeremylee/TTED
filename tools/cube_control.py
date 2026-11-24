@@ -98,6 +98,9 @@ Checks
   measure                 full refresh report
   test                    self-test (checks the pins at 595 clocks up to CPU/4)
   info                    the firmware's own help text
+  probe all               test pattern: every column off (also the unused bits 2 and 18); anything lit = hardware
+  probe <bit>             test pattern: only that 595 bit (0-31) on; says which column / chip / pin it is
+                          ('reset' leaves the probe)
 Other
   help                    this list
   quit                    close the terminal (the cube keeps playing)"""

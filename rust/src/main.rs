@@ -188,6 +188,8 @@ struct Ctx<'a, B: InputPin> {
     tempo: u32,
     /// The PIO divider set at power-up (for '@speed default' / '@reset').
     boot_div: u16,
+    /// '@probe': the bit driven LOW in the test pattern (None = every bit off).
+    probe: Option<u8>,
 }
 
 impl<B: InputPin> Ctx<'_, B> {
@@ -310,6 +312,23 @@ impl<B: InputPin> Ctx<'_, B> {
             _ if w.starts_with(b"speed") => {
                 self.speed(&w[5..]);
                 None
+            }
+            _ if w.starts_with(b"probe") => {
+                let arg = &w[5..];
+                let bit = match arg {
+                    b"" | b"all" | b"none" | b"off" => None,
+                    _ => match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u8>().ok()) {
+                        Some(b) if b < 32 => Some(b),
+                        _ => {
+                            say!("probe: a bit number 0-31 (e.g. @probe 7), or @probe all\r\n");
+                            return None;
+                        }
+                    },
+                };
+                self.probe = bit;
+                describe_probe(bit);
+                self.jump = Some(PROBE);
+                Some(Err(Next))
             }
             _ if w.starts_with(b"tempo") => {
                 self.tempo(&w[5..]);
@@ -805,6 +824,7 @@ fn main() -> ! {
         hold: false,
         tempo: 100,
         boot_div,
+        probe: None,
     };
     if ctx.rng == 0 {
         ctx.rng = 1;
@@ -826,6 +846,11 @@ fn main() -> ! {
             m if m < lightshow::COUNT => lightshow::play(&mut ctx, m),
             m if m < SHOWS => animations::play(&mut ctx, m - lightshow::COUNT),
             DEMO => demo(&mut ctx),
+            PROBE => {
+                let bit = ctx.probe;
+                ctx.cube.show_words(|z, blank| probe_word(z, blank, bit));
+                ctx.wait(1000)
+            }
             OFF => {
                 ctx.cube.clear();
                 ctx.cube.show();
@@ -858,6 +883,48 @@ const DEMO: u8 = SHOWS;
 const MODES: u8 = SHOWS + 2;
 /// '@off': all LEDs dark (not in the button cycle).
 const OFF: u8 = 255;
+/// '@probe': a fixed test pattern for finding wiring faults (not in the button cycle).
+const PROBE: u8 = 254;
+
+/// The probe test pattern. Every column bit and the unused bits (2, 18) HIGH = off; the layers multiplex as
+/// usual. With a bit given, that one bit is flipped: a column bit then lights its whole column.
+fn probe_word(z: usize, blank: bool, bit: Option<u8>) -> u32 {
+    let base = !cube::ALL_LAYERS; // all columns + unused bits HIGH, all layers LOW
+    if blank {
+        return base;
+    }
+    let w = base | cube::LBITS[z];
+    match bit {
+        Some(b) => w ^ (1 << b),
+        None => w,
+    }
+}
+
+/// Say what '@probe' is showing and where that bit is on the 595 chain.
+fn describe_probe(bit: Option<u8>) {
+    let Some(b) = bit else {
+        out("probe all: every column OFF, unused bits 2 and 18 HIGH too, layers multiplexing.\r\n");
+        out("  Anything still lit is held on by the hardware (or wired to a bit the map doesn't know).\r\n");
+        out("  Compare with @off (same, but bits 2 and 18 LOW). @probe <bit> lights one bit. @reset to leave.\r\n");
+        return;
+    };
+    // MSB first: bit b ends at chain position b = chip b/8 (A = first, fed by GP3), output QA..QH.
+    const PINS: [u8; 8] = [15, 1, 2, 3, 4, 5, 6, 7];
+    let chip = (b'A' + b / 8) as char;
+    let q = (b'A' + b % 8) as char;
+    let pin = PINS[(b % 8) as usize];
+    if let Some(i) = cube::XY_MAP.iter().position(|&m| m == b) {
+        say!("probe bit {}: column x={} y={} (index {}) LOW = lit | 595 chip {} output Q{} (pin {})\r\n",
+            b, i % N, i / N, i, chip, q, pin);
+    } else if let Some(z) = cube::LAYER_MAP.iter().position(|&m| m == b) {
+        say!("probe bit {}: layer {} (flipped: that layer goes dark) | 595 chip {} output Q{} (pin {})\r\n",
+            b, z, chip, q, pin);
+    } else {
+        say!("probe bit {}: not in the bit map (unused) driven LOW | 595 chip {} output Q{} (pin {})\r\n",
+            b, chip, q, pin);
+    }
+    out("  @reset to leave the probe.\r\n");
+}
 
 fn mode_name(mode: u8) -> &'static str {
     match mode {
@@ -865,6 +932,7 @@ fn mode_name(mode: u8) -> &'static str {
         m if m < SHOWS => animations::NAMES[(m - lightshow::COUNT) as usize],
         DEMO => "CubeLib demo",
         OFF => "off",
+        PROBE => "probe (test pattern)",
         _ => "Quadrum TTED.txt",
     }
 }
