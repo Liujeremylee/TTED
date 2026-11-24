@@ -54,7 +54,7 @@ the regulator's voltage limit is never disabled. The flash clock stays at or bel
 firmware runs a PIO/DMA pin self-test, compares 2,000 table builds against the reference, and measures the
 refresh rate. A watchdog reboots at 240 MHz if a step hangs the chip, and `m` then reports the clock that failed.
 **Tested on the board: 240–400 MHz**, all Pico-side checks pass. The 595s show a clean picture up to an 84 MHz
-shift clock, so the firmware boots at 328 MHz with the PIO at CPU/2 = an 82 MHz 595 clock, a little margin below the edge (`BOOT_STEP = 5`, `MAX_SCK_HZ` in
+shift clock, so the firmware boots at 320 MHz with the PIO at CPU/2 = an 80 MHz 595 clock, a little margin below the edge (`BOOT_STEP = 4`, `MAX_SCK_HZ` in
 `src/main.rs`). See `../PERFORMANCE.md` for the full speed test.
 
 ## Windows build notes

@@ -35,12 +35,15 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `measure` | `m` | Refresh report: clocks, measured refresh rate, table build times, self-test result |
 | `test` | `t` | Self-test: table vs the original CubeLib algorithm, and the words on the pins (595 clock ≤ CPU/4) |
 | `speed` | `@speed` | Show the speed: 595 clock, CPU clock, PIO divider, full brightness cycles/s, tempo. All speed commands change the cube live |
-| `speed 84` | `@speed 84` | Set the 595 clock to the fastest setting at or below that many MHz (the fast build also picks the CPU clock). 84 = fastest clean on this cube, 21 ≈ the board's design speed. Back to 82 MHz (the default) at every power-up |
+| `speed 84` | `@speed 84` | Set the 595 clock to the fastest setting at or below that many MHz (the fast build also picks the CPU clock). 84 = fastest clean on this cube, 21 ≈ the board's design speed. Back to 80 MHz (the default) at every power-up |
 | `jason` | `@jason` | Jason's setting: the original design speed, 595 clock 20 MHz with the CPU at 240 MHz |
 | `faster` / `slower` | `+` / `-` | 595 clock one step up / down (CPU ÷ 1, 2, 3 ...) |
 | `tempo 150` | `@tempo 150` | How fast the animations play, in percent: 200 = twice as fast, 50 = half speed (25–400). `tempo` alone shows it |
-| `reset` | `@reset` | Back to defaults: power-up speed (82 MHz), tempo 100 %, full brightness, presets cycling (`auto`) |
+| `reset` | `@reset` | Back to defaults: power-up speed (80 MHz), tempo 100 %, full brightness, presets cycling (`auto`) |
 | `overclock` / `underclock` | `>` / `<` | CPU = PIO clock one step up / down, 240–400 MHz (`unlimited` build only) |
+| `probe all` | `@probe all` | Test pattern: every column off (also the unused bits 2 and 18), layers running. Anything lit = hardware |
+| `probe dark` | `@probe dark` | Test pattern: every layer and column off. Anything lit is powered by the board itself |
+| `probe 7` | `@probe 7` | Test pattern: only that 595 bit (0–31) on; prints which column / layer, chip and pin it is. `reset` leaves the probe |
 | `info` | `h` | Firmware help text |
 | `help` | — | This list, in the terminal |
 | `quit` | — | Close the terminal (the cube keeps playing) |

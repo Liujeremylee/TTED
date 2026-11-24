@@ -58,8 +58,8 @@ const PLL_SYS_240MHZ: hal::pll::PLLConfig =
 /// The 595 shift clock the original SPI code used. Raise it to go faster if your 595s and wiring allow.
 #[cfg(not(feature = "unlimited"))]
 const MAX_SCK_HZ: u32 = 20_000_000;
-/// `--features unlimited`: ignore the 595's rating. 60 MHz = PIO divider 2 at 240 MHz; with BOOT_STEP 5
-/// (328 MHz) that becomes 82 MHz, the default (84 MHz is the fastest this cube's 595s showed clean; tested Nov. 2026, with the
+/// `--features unlimited`: ignore the 595's rating. 60 MHz = PIO divider 2 at 240 MHz; with BOOT_STEP 4
+/// (320 MHz) that becomes 80 MHz, the default (84 MHz is the fastest this cube's 595s showed clean; tested Nov. 2026, with the
 /// stacked 595s: 84 MHz clean, 85.5 MHz past the edge, 90 MHz faint flicker, 100 MHz and up dark or one LED).
 /// '+' still goes to divider 1 (CPU/2) if you want to try.
 // Jason, your retirement time has came closer.
@@ -67,10 +67,10 @@ const MAX_SCK_HZ: u32 = 20_000_000;
 const MAX_SCK_HZ: u32 = 60_000_000;
 /// PIO1 can sample the pins (self-test, timing) only up to this PIO divider; faster clocks skip that check.
 const CAPTURE_MIN_DIV: u16 = 4;
-/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz, 5 = 328 MHz
-/// (595 clock 82 MHz with the divider above). If it ever hangs, the watchdog restarts at 240 MHz (60 MHz).
+/// `unlimited` only: the overclock step (index into overclock::STEPS) to boot at. 0 = 240 MHz, 4 = 320 MHz
+/// (595 clock 80 MHz with the divider above). If it ever hangs, the watchdog restarts at 240 MHz (60 MHz).
 #[cfg(feature = "unlimited")]
-const BOOT_STEP: usize = 5;
+const BOOT_STEP: usize = 4;
 /// Extra PIO cycles per slot. 0 = fastest. Raise it if you see ghosting between layers.
 const HOLD: u32 = 0;
 /// Limits for the '+'/'-' 595 clock commands: CPU/3/2 = 40 MHz ... CPU/24/2 = 5 MHz.
@@ -251,7 +251,7 @@ impl<B: InputPin> Ctx<'_, B> {
         }
     }
 
-    /// The power-up speed (unlimited: BOOT_STEP and the boot divider, i.e. 82 MHz).
+    /// The power-up speed (unlimited: BOOT_STEP and the boot divider, i.e. 80 MHz).
     fn speed_default(&mut self) {
         #[cfg(feature = "unlimited")]
         let step = BOOT_STEP;
@@ -352,6 +352,7 @@ impl<B: InputPin> Ctx<'_, B> {
                 let arg = &w[5..];
                 let bit = match arg {
                     b"" | b"all" | b"none" | b"off" => None,
+                    b"dark" | b"blank" | b"nothing" => Some(PROBE_DARK),
                     _ => match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<u8>().ok()) {
                         Some(b) if b < 32 => Some(b),
                         _ => {
@@ -985,12 +986,14 @@ const MODES: u8 = SHOWS + 2;
 const OFF: u8 = 255;
 /// '@probe': a fixed test pattern for finding wiring faults (not in the button cycle).
 const PROBE: u8 = 254;
+/// '@probe dark': the probe "bit" meaning every layer and every column off.
+const PROBE_DARK: u8 = 255;
 
 /// The probe test pattern. Every column bit and the unused bits (2, 18) HIGH = off; the layers multiplex as
 /// usual. With a bit given, that one bit is flipped: a column bit then lights its whole column.
 fn probe_word(z: usize, blank: bool, bit: Option<u8>) -> u32 {
     let base = !cube::ALL_LAYERS; // all columns + unused bits HIGH, all layers LOW
-    if blank {
+    if blank || bit == Some(PROBE_DARK) {
         return base;
     }
     let w = base | cube::LBITS[z];
@@ -1002,6 +1005,12 @@ fn probe_word(z: usize, blank: bool, bit: Option<u8>) -> u32 {
 
 /// Say what '@probe' is showing and where that bit is on the 595 chain.
 fn describe_probe(bit: Option<u8>) {
+    if bit == Some(PROBE_DARK) {
+        out("probe dark: every layer OFF and every column OFF (incl. bits 2 and 18). Nothing should be lit at all.\r\n");
+        out("  An LED still lit here is powered by the board itself (short, solder bridge, or a damaged LED/driver).\r\n");
+        out("  @reset to leave the probe.\r\n");
+        return;
+    }
     let Some(b) = bit else {
         out("probe all: every column OFF, unused bits 2 and 18 HIGH too, layers multiplexing.\r\n");
         out("  Anything still lit is held on by the hardware (or wired to a bit the map doesn't know).\r\n");

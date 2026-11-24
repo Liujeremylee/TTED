@@ -94,19 +94,20 @@ Buttons on the cube
   4 (GP12) brightness one step down: 5 -> 4 -> 3 -> 2 -> 1 -> back to 5
 Speed (all change live, no restart)
   speed                   show the current speed (595 clock, CPU clock, refresh rate, tempo)
-  speed <MHz>             set the 595 clock, e.g. 'speed 82' (the default), 'speed 84' (fastest clean), 'speed 21'
+  speed <MHz>             set the 595 clock, e.g. 'speed 80' (the default), 'speed 84' (fastest clean), 'speed 21'
   jason                   Jason's setting: the original design speed, 595 clock 20 MHz, CPU 240 MHz
   faster / slower         595 clock one step up / down
   overclock / underclock  CPU clock one step up / down (fast 'unlimited' build only)
   tempo <percent>         how fast the animations play: 'tempo 200' = twice as fast, 'tempo 50' = half
   tempo                   show the tempo
-  reset                   back to defaults: power-up speed (82 MHz), tempo 100%, full brightness, presets cycling
+  reset                   back to defaults: power-up speed (80 MHz), tempo 100%, full brightness, presets cycling
 Checks
   measure                 full refresh report
   test                    self-test (checks the pins at 595 clocks up to CPU/4)
   info                    the firmware's own help text
   probe all               test pattern: every column off (also the unused bits 2 and 18); anything lit = hardware
-  probe <bit>             test pattern: only that 595 bit (0-31) on; says which column / chip / pin it is
+  probe dark              test pattern: every layer AND column off; anything lit = powered by the board itself
+  probe <bit>           test pattern: only that 595 bit (0-31) on; says which column / chip / pin it is
                           ('reset' leaves the probe)
 Other
   help                    this list
@@ -226,7 +227,7 @@ def show_list(cube):
     print(f"\n {'-' * (width - 2)}")
     print(" Type a name or number to play it. 'auto' = cycle all, 'off'/'on', 'dim'/'bright', 'help' = all commands.")
     print(" Brightness 1-5: 'bright', 'dim', 'brightness 3'. Buttons: 1 next, 2 previous, 3 on/off, 4 brightness.")
-    print(" Speed: 'speed 82', 'jason' (original 20 MHz), 'tempo 150' (animation pace), 'reset' (defaults).")
+    print(" Speed: 'speed 80', 'jason' (original 20 MHz), 'tempo 150' (animation pace), 'reset' (defaults).")
     print("=" * width)
     print()
 
