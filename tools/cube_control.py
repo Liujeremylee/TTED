@@ -106,7 +106,10 @@ Checks
   test                    self-test (checks the pins at 595 clocks up to CPU/4)
   info                    the firmware's own help text
   probe all               test pattern: every column off (also the unused bits 2 and 18); anything lit = hardware
-  probe dark              test pattern: every layer AND column off; anything lit = powered by the board itself
+  walk                    light every LED one at a time (1 s each) and print its number and position
+  walk <n>                light only LED n (0-124) and hold; next / prev (or buttons 1 / 2) step one LED
+  walk stop               hold the LED the walk is on
+  probe dark            test pattern: every layer AND column off; anything lit = powered by the board itself
   probe <bit>           test pattern: only that 595 bit (0-31) on; says which column / chip / pin it is
                           ('reset' leaves the probe)
 Other

@@ -41,6 +41,7 @@ Type them at the `cube>` prompt and press Enter. In any other serial terminal (a
 | `tempo 150` | `@tempo 150` | How fast the animations play, in percent: 200 = twice as fast, 50 = half speed (25–400). `tempo` alone shows it |
 | `reset` | `@reset` | Back to defaults: power-up speed (80 MHz), tempo 100 %, full brightness, presets cycling (`auto`) |
 | `overclock` / `underclock` | `>` / `<` | CPU = PIO clock one step up / down, 240–400 MHz (`unlimited` build only) |
+| `walk` | `@walk` | Light every LED one at a time (1 s each) and print its number, x / y / layer and 595 bits. `walk 37` lights only LED 37 and holds; `next` / `prev` (or buttons 1 / 2) step one LED; `walk stop` holds |
 | `probe all` | `@probe all` | Test pattern: every column off (also the unused bits 2 and 18), layers running. Anything lit = hardware |
 | `probe dark` | `@probe dark` | Test pattern: every layer and column off. Anything lit is powered by the board itself |
 | `probe 7` | `@probe 7` | Test pattern: only that 595 bit (0–31) on; prints which column / layer, chip and pin it is. `reset` leaves the probe |

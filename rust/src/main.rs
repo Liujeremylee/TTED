@@ -196,6 +196,9 @@ struct Ctx<'a, B: InputPin> {
     boot_div: u16,
     /// '@probe': the bit driven LOW in the test pattern (None = every bit off).
     probe: Option<u8>,
+    /// '@walk': the one LED lit (index z*25 + y*5 + x), and whether it moves on by itself every second.
+    walk: u8,
+    walk_auto: bool,
 }
 
 impl<B: InputPin> Ctx<'_, B> {
@@ -311,7 +314,33 @@ impl<B: InputPin> Ctx<'_, B> {
                 }
                 None
             }
-            b"next" | b"skip" => Some(Err(Next)),
+            b"next" | b"skip" => Some(self.next()),
+            _ if w.starts_with(b"walk") => {
+                let arg = &w[4..];
+                match arg {
+                    b"" | b"auto" | b"all" => {
+                        self.walk = 0;
+                        self.walk_auto = true;
+                        say!("walk: one LED at a time, 1 s each, all {} (@walk <n> holds one, @next / @prev step, @reset leaves)\r\n", LEDS);
+                    }
+                    b"stop" | b"hold" | b"pause" => {
+                        self.walk_auto = false;
+                        say!("walk: holding LED #{}\r\n", self.walk);
+                    }
+                    _ => match core::str::from_utf8(arg).ok().and_then(|s| s.parse::<usize>().ok()) {
+                        Some(n) if n < LEDS => {
+                            self.walk = n as u8;
+                            self.walk_auto = false;
+                        }
+                        _ => {
+                            say!("walk: an LED number 0-{} (e.g. @walk 37), or @walk alone to go through all\r\n", LEDS - 1);
+                            return None;
+                        }
+                    },
+                }
+                self.jump = Some(WALK);
+                Some(Err(Next))
+            }
             b"prev" | b"previous" | b"back" => Some(self.previous()),
             b"off" | b"dark" | b"stop" | b"blackout" => Some(self.power(false)),
             b"on" | b"resume" => Some(self.power(true)),
@@ -413,8 +442,24 @@ impl<B: InputPin> Ctx<'_, B> {
         Err(Next)
     }
 
+    /// The next preset (in '@walk': the next LED, and the walk stops auto-advancing).
+    fn next(&mut self) -> Result<(), Next> {
+        if self.mode == WALK {
+            self.walk = ((self.walk as usize + 1) % LEDS) as u8;
+            self.walk_auto = false;
+            self.jump = Some(WALK);
+        }
+        Err(Next)
+    }
+
     /// The previous preset (from off: the one before the preset that was playing).
     fn previous(&mut self) -> Result<(), Next> {
+        if self.mode == WALK {
+            self.walk = ((self.walk as usize + LEDS - 1) % LEDS) as u8;
+            self.walk_auto = false;
+            self.jump = Some(WALK);
+            return Err(Next);
+        }
         let from = if self.mode < MODES { self.mode } else { self.resume };
         self.jump = Some((from + MODES - 1) % MODES);
         Err(Next)
@@ -451,7 +496,7 @@ impl<B: InputPin> Ctx<'_, B> {
                     if self.mode == OFF {
                         return Some(self.power(true)); // from off, button 1 also switches back on
                     }
-                    return Some(Err(Next));
+                    return Some(self.next());
                 }
                 1 => return Some(self.previous()),
                 2 => return Some(self.power(self.mode == OFF)),
@@ -926,6 +971,8 @@ fn main() -> ! {
         tempo: 100,
         boot_div,
         probe: None,
+        walk: 0,
+        walk_auto: true,
     };
     if ctx.rng == 0 {
         ctx.rng = 1;
@@ -952,6 +999,21 @@ fn main() -> ! {
                 ctx.cube.show_words(|z, blank| probe_word(z, blank, bit));
                 ctx.wait(1000)
             }
+            WALK => {
+                let i = ctx.walk as usize;
+                let (x, y, z) = (i % N, i / N % N, i / (N * N));
+                ctx.cube.clear();
+                ctx.cube.set(x, y, z, cube::LEVELS as u8);
+                ctx.cube.show();
+                say!("walk: LED #{:3}  x={} y={} layer z={} | column bit {}, layer bit {}{}\r\n",
+                    i, x, y, z, cube::XY_MAP[y * N + x], cube::LAYER_MAP[z],
+                    if ctx.walk_auto { "" } else { "  (holding: @next / @prev)" });
+                let r = ctx.wait(if ctx.walk_auto { 1000 } else { 3_600_000 });
+                if r.is_ok() && ctx.walk_auto {
+                    ctx.walk = ((i + 1) % LEDS) as u8;
+                }
+                r
+            }
             OFF => {
                 ctx.cube.clear();
                 ctx.cube.show();
@@ -969,10 +1031,13 @@ fn main() -> ! {
             Ok(()) => None,
         };
         if let Some(m) = next {
+            let stepping = m == WALK && ctx.mode == WALK; // '@next' in the walk: the walk line says enough
             ctx.mode = m;
             ctx.cube.clear();
             ctx.cube.show();
-            say!("animation: {}{}\r\n", mode_name(m), if ctx.hold && m < SHOWS { "  (repeating; @auto to cycle)" } else { "" });
+            if !stepping {
+                say!("animation: {}{}\r\n", mode_name(m), if ctx.hold && m < SHOWS { "  (repeating; @auto to cycle)" } else { "" });
+            }
         }
     }
 }
@@ -986,6 +1051,8 @@ const MODES: u8 = SHOWS + 2;
 const OFF: u8 = 255;
 /// '@probe': a fixed test pattern for finding wiring faults (not in the button cycle).
 const PROBE: u8 = 254;
+/// '@walk': one LED at a time, for finding a faulty LED (not in the button cycle).
+const WALK: u8 = 253;
 /// '@probe dark': the probe "bit" meaning every layer and every column off.
 const PROBE_DARK: u8 = 255;
 
@@ -1042,6 +1109,7 @@ fn mode_name(mode: u8) -> &'static str {
         DEMO => "CubeLib demo",
         OFF => "off",
         PROBE => "probe (test pattern)",
+        WALK => "walk (one LED at a time)",
         _ => "Quadrum TTED.txt",
     }
 }
